@@ -13,26 +13,26 @@ export default function Hero() {
             <span className="grid h-5 w-5 place-items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-500 text-white">
               <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor"><path d="M8 1l1.8 4.2L14 7l-4.2 1.8L8 13l-1.8-4.2L2 7l4.2-1.8z"/></svg>
             </span>
-            Solana × Ika dWallet × Encrypt FHE
+            Solana × Ika × Oro/GRAIL × Encrypt FHE
             <span className="text-violet-400">·</span>
             <span className="text-violet-600">2026</span>
           </a>
 
           <h1 className="mt-6 text-[44px] font-semibold leading-[1.02] tracking-[-0.035em] text-zinc-950 sm:text-[64px] md:text-[76px]">
-            Deploy capital
+            Borrow against
             <br />
-            without{" "}
+            <span className="serif-italic bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">
+              gold,
+            </span>{" "}
             <span className="serif-italic bg-gradient-to-r from-violet-700 via-fuchsia-600 to-rose-500 bg-clip-text text-transparent">
-              disclosing
+              BTC,
             </span>
             <br />
-            <span className="serif-italic bg-gradient-to-r from-violet-700 via-fuchsia-600 to-rose-500 bg-clip-text text-transparent">
-              capital.
-            </span>
+            anything.
           </h1>
 
           <p className="mt-7 max-w-xl text-[17px] leading-[1.65] text-zinc-600">
-            Veil is a <span className="text-zinc-900 font-medium">private, cross-chain lending protocol on Solana</span>. Pledge native BTC and ETH — never bridged, never wrapped — and keep every balance, debt, and health factor encrypted onchain via FHE.
+            Veil is the <span className="text-zinc-900 font-medium">first lending protocol on Solana</span> where you can borrow against native Bitcoin, physical gold, or any on-chain asset — with an optional privacy layer. No bridges, no wrapping.
           </p>
 
           <div className="mt-9 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
