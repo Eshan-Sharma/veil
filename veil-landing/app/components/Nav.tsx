@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ConnectButton from "./ConnectButton";
 
 function Logo() {
   return (
@@ -55,15 +56,7 @@ export default function Nav() {
             >
               GitHub
             </a>
-            <a
-              href="#launch"
-              className="group inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-950 px-4 text-[13.5px] font-semibold text-white transition hover:bg-zinc-800"
-            >
-              Launch app
-              <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" className="transition group-hover:translate-x-0.5">
-                <path d="M4 10h12M11 5l5 5-5 5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </a>
+            <ConnectButton size="sm" />
           </div>
         </nav>
       </div>

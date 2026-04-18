@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import SolanaProvider from "./providers/SolanaProvider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -22,14 +23,14 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Veil — Private, cross-chain lending on Solana",
+  title: "Veil — Borrow against native BTC, gold, or any asset on Solana",
   description:
-    "Veil lets you borrow against native BTC and ETH on Solana, without bridges and with fully encrypted positions. Institutional-grade capital, onchain privacy.",
+    "Veil is the first lending protocol on Solana where you can borrow against native Bitcoin, physical gold, or any on-chain asset — with an optional privacy layer. No bridges, no wrapping.",
   metadataBase: new URL("https://veil.xyz"),
   openGraph: {
-    title: "Veil — Private, cross-chain lending on Solana",
+    title: "Veil — Borrow against native BTC, gold, or any asset on Solana",
     description:
-      "Native BTC/ETH collateral, FHE-encrypted positions, built on Pinocchio, Ika dWallets and Encrypt.",
+      "Native BTC/ETH collateral, physical gold via Oro/GRAIL, FHE-encrypted positions. Built on Pinocchio, Ika dWallets, and Encrypt.",
     type: "website",
   },
 };
@@ -42,7 +43,9 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${serif.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col page-bg">{children}</body>
+      <body className="min-h-full flex flex-col page-bg">
+        <SolanaProvider>{children}</SolanaProvider>
+      </body>
     </html>
   );
 }
