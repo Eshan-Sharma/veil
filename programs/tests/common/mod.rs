@@ -19,7 +19,7 @@ allocator), so data lands at byte 96 = 6×16. ✓
 */
 
 use pinocchio::{account::RuntimeAccount, Address, AccountView};
-use veil_lending::{math::WAD, state::LendingPool};
+use veil_lending::{math::WAD, state::{EncryptedPosition, IkaDwalletPosition, LendingPool}};
 
 const ACCOUNT_HEADER: usize = 88;
 const BACKING_OFFSET: usize = 8; // data at 8+88=96 (multiple of 16)
@@ -82,4 +82,64 @@ pub fn make_pool(authority: [u8; 32], accumulated_fees: u64) -> LendingPool {
     pool.supply_index = WAD;
     pool.accumulated_fees = accumulated_fees;
     pool
+}
+
+/// Build the raw bytes of a Pyth legacy push-oracle price account.
+///
+/// Only fills in the fields that `pyth::read_price` actually reads; all other
+/// bytes are zero (valid for a freshly-created account on-chain).
+pub fn make_pyth_bytes(price: i64, conf: u64, expo: i32, status: u32) -> Vec<u8> {
+    let mut data = vec![0u8; 512];
+    data[0..4].copy_from_slice(&0xa1b2c3d4u32.to_le_bytes()); // magic
+    data[4..8].copy_from_slice(&2u32.to_le_bytes());           // ver = 2
+    data[8..12].copy_from_slice(&3u32.to_le_bytes());          // atype = Price
+    data[20..24].copy_from_slice(&expo.to_le_bytes());         // expo
+    data[208..216].copy_from_slice(&price.to_le_bytes());      // agg.price
+    data[216..224].copy_from_slice(&conf.to_le_bytes());       // agg.conf
+    data[224..228].copy_from_slice(&status.to_le_bytes());     // agg.status
+    data
+}
+
+pub fn ika_position_bytes(
+    owner: [u8; 32],
+    pool: [u8; 32],
+    dwallet: [u8; 32],
+    usd_value: u64,
+    curve: u16,
+    signature_scheme: u16,
+    bump: u8,
+) -> Vec<u8> {
+    use veil_lending::state::ika_position::status;
+    let mut pos: IkaDwalletPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator    = IkaDwalletPosition::DISCRIMINATOR;
+    pos.owner            = Address::new_from_array(owner);
+    pos.pool             = Address::new_from_array(pool);
+    pos.dwallet          = Address::new_from_array(dwallet);
+    pos.usd_value        = usd_value;
+    pos.curve            = curve;
+    pos.signature_scheme = signature_scheme;
+    pos.status           = status::ACTIVE;
+    pos.bump             = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const IkaDwalletPosition as *const u8,
+            IkaDwalletPosition::SIZE,
+        )
+        .to_vec()
+    }
+}
+
+pub fn enc_position_bytes(owner: [u8; 32], pool: [u8; 32], bump: u8) -> Vec<u8> {
+    let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator = EncryptedPosition::DISCRIMINATOR;
+    pos.owner         = Address::new_from_array(owner);
+    pos.pool          = Address::new_from_array(pool);
+    pos.bump          = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const EncryptedPosition as *const u8,
+            EncryptedPosition::SIZE,
+        )
+        .to_vec()
+    }
 }
