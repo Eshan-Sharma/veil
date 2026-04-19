@@ -69,6 +69,16 @@ const items = [
       <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 20h18v1H3zm1-4l5-5 4 4 7-9v4l-7 9-4-4-5 5v-4z"/></svg>
     ),
   },
+  {
+    name: "Flash Loans",
+    role: "Uncollateralized atomic lending",
+    body: "Borrow any amount, execute your strategy, repay in one transaction. Atomic enforcement at the program level — no collateral, no credit risk. 0.09 % fee split 90 / 10 between LPs and protocol.",
+    tag: "DeFi",
+    gradient: "from-sky-500 to-cyan-400",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M13 2L4 14h8l-1 8 9-12h-8l1-8z"/></svg>
+    ),
+  },
 ];
 
 export default function TechStack() {

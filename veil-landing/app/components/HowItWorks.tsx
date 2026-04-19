@@ -25,6 +25,14 @@ const steps = [
   },
   {
     n: "04",
+    eyebrow: "Flash loans",
+    title: "Borrow without collateral — atomically, in one transaction.",
+    body: "Take any amount from the pool with no collateral required. Return it with a 0.09 % fee in the same transaction or it reverts. Useful for arbitrage, on-chain liquidation bots, and collateral swaps. 90 % of fees go to LPs.",
+    accent: "from-sky-500 to-cyan-400",
+    chips: ["No collateral", "Atomic repayment", "0.09 % fee", "90 % to LPs"],
+  },
+  {
+    n: "05",
     eyebrow: "Liquidate cross-chain",
     title: "When health breaks, the dWallet signs settlement natively.",
     body: "An unhealthy position triggers an on-chain instruction that asks the dWallet's MPC network to co-sign a transaction on the asset's native chain. No wrapped IOU, no bridge round-trip.",
@@ -41,7 +49,7 @@ export default function HowItWorks() {
           How it works
         </span>
         <h2 className="mt-5 text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-zinc-950 sm:text-[54px]">
-          Four moves, <span className="serif-italic text-violet-700">one protocol.</span>
+          Five moves, <span className="serif-italic text-violet-700">one protocol.</span>
         </h2>
         <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-zinc-600">
           Solana coordinates capital from every chain — native BTC, native ETH, and physical gold. Privacy is a toggle, not an L2 detour.

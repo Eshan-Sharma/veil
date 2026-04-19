@@ -4,6 +4,10 @@ const qs = [
     a: "Veil integrates Oro's GRAIL platform, which is digital gold infrastructure for modern finance. Oro handles the hard parts — physical custody, regulatory compliance, KYC, and on-chain settlement. Users pledge gold-backed assets through Oro's self-custody model; Veil's Solana program tracks the position and enforces collateral logic. This makes Veil the first DeFi lending protocol where physical gold works as productive collateral alongside native crypto.",
   },
   {
+    q: "What are flash loans and how do they work on Veil?",
+    a: "A flash loan lets you borrow any amount from a Veil pool within a single Solana transaction — no collateral required. The catch: you must return the borrowed amount plus a 0.09 % fee in the same transaction. If the repayment instruction is missing or falls short, the entire transaction reverts atomically and no funds move. This makes flash loans safe for the protocol while unlocking capital-efficient strategies like arbitrage, liquidation bots, and collateral swaps. 90 % of the fee goes to liquidity providers; 10 % to the protocol.",
+  },
+  {
     q: "How does Veil hold native BTC without bridging?",
     a: "Veil uses an Ika dWallet — a programmable wallet jointly controlled by you and Ika's MPC network. Your Bitcoin stays on Bitcoin as native UTXOs. A Solana program sends signing instructions; the dWallet co-signs. No wrapped token, no custodian.",
   },
