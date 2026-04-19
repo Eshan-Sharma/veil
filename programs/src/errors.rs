@@ -57,6 +57,8 @@ pub enum LendError {
     OraclePriceStale,
     /// Provided price feed does not match the one anchored to the pool.
     OraclePriceFeedMismatch,
+    /// Pyth confidence interval exceeds 2 % of price — data too uncertain.
+    OracleConfTooWide,
 }
 
 impl From<LendError> for ProgramError {

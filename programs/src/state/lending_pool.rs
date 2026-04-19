@@ -36,8 +36,8 @@ Layout (repr C, 408 bytes, 16-byte aligned throughout):
 | 384    |   8  | oracle_price           |
 | 392    |   8  | oracle_conf            |
 | 400    |   4  | oracle_expo            |
-| 404    |   4  | _oracle_pad            |
-| 408    |      | (end)                  |
+| 404    |  12  | _oracle_pad            |
+| 416    |      | (end)                  |
 */
 
 use crate::math::WAD;
@@ -106,12 +106,12 @@ pub struct LendingPool {
     pub oracle_conf: u64,
     /// Price exponent (negative — price_usd = oracle_price × 10^oracle_expo).
     pub oracle_expo: i32,
-    pub _oracle_pad: [u8; 4],
+    pub _oracle_pad: [u8; 12],
 }
 
 impl LendingPool {
     pub const DISCRIMINATOR: [u8; 8] = *b"VEILPOOL";
-    pub const SIZE: usize = 408;
+    pub const SIZE: usize = 416;
 
     // ── Zero-copy account access ──────────────────────────────────────────
 

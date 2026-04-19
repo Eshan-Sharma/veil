@@ -24,7 +24,7 @@ export const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111
 export const WAD = BigInt("1000000000000000000");
 
 /** LendingPool on-chain size (bytes) */
-export const POOL_SIZE = 408;
+export const POOL_SIZE = 416;
 
 /** UserPosition on-chain size (bytes) */
 export const POSITION_SIZE = 144;
