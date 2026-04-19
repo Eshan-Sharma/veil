@@ -68,7 +68,6 @@ impl Repay {
         let (total_debt, borrow_index) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             if pos.borrow_principal == 0 {
                 return Err(LendError::NoBorrow.into());

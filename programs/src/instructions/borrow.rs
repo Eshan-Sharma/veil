@@ -62,9 +62,6 @@ impl Borrow {
         let clock = Clock::get()?;
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
-            if pool.paused != 0 {
-                return Err(LendError::PoolPaused.into());
-            }
             pool.accrue_interest(clock.unix_timestamp)?;
         }
 
@@ -72,7 +69,6 @@ impl Borrow {
         let authority_bump = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             let deposit_balance =
                 math::current_deposit_balance(pos.deposit_shares, pool.supply_index)?;
@@ -124,7 +120,6 @@ impl Borrow {
         let (borrow_index, existing_debt) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             let debt = math::current_borrow_balance(
                 pos.borrow_principal,
                 pool.borrow_index,

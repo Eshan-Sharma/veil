@@ -1,7 +1,7 @@
 /*!
 `LendingPool` — one account per token market.
 
-Layout (repr C, 408 bytes, 16-byte aligned throughout):
+Layout (repr C, 336 bytes, 16-byte aligned throughout):
 
 | offset | size | field                  |
 |--------|------|------------------------|
@@ -16,8 +16,7 @@ Layout (repr C, 408 bytes, 16-byte aligned throughout):
 | 136    |   1  | authority_bump         |
 | 137    |   1  | pool_bump              |
 | 138    |   1  | vault_bump             |
-| 139    |   1  | paused                 |
-| 140    |   4  | _pad                   |
+| 139    |   5  | _pad                   |
 | 144    |  16  | borrow_index           |
 | 160    |  16  | supply_index           |
 | 176    |  16  | base_rate              |
@@ -30,14 +29,7 @@ Layout (repr C, 408 bytes, 16-byte aligned throughout):
 | 288    |  16  | liquidation_bonus      |
 | 304    |  16  | protocol_liq_fee       |
 | 320    |  16  | close_factor           |
-| 336    |   8  | flash_loan_amount      |
-| 344    |   8  | flash_fee_bps          |
-| 352    |  32  | pyth_price_feed        |
-| 384    |   8  | oracle_price           |
-| 392    |   8  | oracle_conf            |
-| 400    |   4  | oracle_expo            |
-| 404    |  12  | _oracle_pad            |
-| 416    |      | (end)                  |
+| 336    |      | (end)                  |
 */
 
 use crate::math::WAD;
@@ -68,9 +60,7 @@ pub struct LendingPool {
     pub authority_bump: u8,
     pub pool_bump: u8,
     pub vault_bump: u8,
-    /// Non-zero when the pool is paused; deposits and borrows are blocked.
-    pub paused: u8,
-    pub _pad: [u8; 4],
+    pub _pad: [u8; 5],
 
     // ── Interest indices (WAD = 1e18) ─────────────────────────────────────
     pub borrow_index: u128,
@@ -89,29 +79,11 @@ pub struct LendingPool {
     pub liquidation_bonus: u128,
     pub protocol_liq_fee: u128,
     pub close_factor: u128,
-
-    // ── Flash loan state ──────────────────────────────────────────────────
-    /// Amount currently lent via an in-flight flash loan (0 = none active).
-    pub flash_loan_amount: u64,
-    /// Flash loan fee in basis points (default 9 = 0.09 %).
-    pub flash_fee_bps: u64,
-
-    // ── Pyth oracle ───────────────────────────────────────────────────────
-    /// Pyth legacy push-oracle price feed account address.
-    /// All-zeros means no feed has been anchored yet.
-    pub pyth_price_feed: Address,
-    /// Last cached aggregate price (raw, apply oracle_expo for USD value).
-    pub oracle_price: i64,
-    /// Last cached aggregate confidence interval.
-    pub oracle_conf: u64,
-    /// Price exponent (negative — price_usd = oracle_price × 10^oracle_expo).
-    pub oracle_expo: i32,
-    pub _oracle_pad: [u8; 12],
 }
 
 impl LendingPool {
     pub const DISCRIMINATOR: [u8; 8] = *b"VEILPOOL";
-    pub const SIZE: usize = 416;
+    pub const SIZE: usize = 336;
 
     // ── Zero-copy account access ──────────────────────────────────────────
 
@@ -191,10 +163,6 @@ impl LendingPool {
         pool.liquidation_bonus = crate::math::LIQ_BONUS;
         pool.protocol_liq_fee = crate::math::PROTOCOL_LIQ_FEE;
         pool.close_factor = crate::math::CLOSE_FACTOR;
-
-        // Flash loan defaults.
-        pool.flash_loan_amount = 0;
-        pool.flash_fee_bps = crate::math::FLASH_FEE_BPS;
 
         Ok(())
     }

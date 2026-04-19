@@ -34,10 +34,6 @@ Veil integrates [Oro's GRAIL platform](https://docs.grail.oro.finance/) to suppo
 
 Each user position has a privacy toggle. When enabled, Veil integrates [Encrypt's](https://docs.encrypt.xyz/getting-started/installation) FHE infrastructure: balances and borrow amounts are stored as ciphertext on-chain, and health factor computations execute over encrypted data using the REFHE scheme. Observers see nothing — not the collateral, not the debt, not the liquidation price. Protocol invariants (solvency, health factor enforcement) are maintained without exposing position data publicly.
 
-### Flash Loans
-
-Veil includes a native flash loan primitive. Borrow any amount up to the pool's free liquidity within a single Solana transaction — no collateral required. The funds must be returned with a 0.09 % fee by the final instruction of the same transaction. If repayment is missing or insufficient, the transaction reverts atomically and no funds move. Fee is split 90 % to LPs, 10 % to the protocol.
-
 ### Efficient On-Chain Execution
 
 The core protocol is built using [Pinocchio](https://github.com/febo/pinocchio), Solana's zero-dependency, zero-copy program framework. This gives Veil significantly lower compute unit consumption than equivalent Anchor-based protocols — which matters at scale when health factor checks run on every borrow and liquidation.
@@ -73,7 +69,6 @@ The core protocol is built using [Pinocchio](https://github.com/febo/pinocchio),
 - Kink-based interest rate model
 - Health factor engine with oracle-fed pricing (Pyth)
 - Cross-chain liquidation via programmable MPC signing
-- Flash loans — atomic, uncollateralized, single-transaction (0.09 % fee)
 - Privacy toggle per position (opt-in FHE)
 - Designed to upgrade in place as Ika and Encrypt reach mainnet — no migration required
 
@@ -89,7 +84,7 @@ The core protocol is built using [Pinocchio](https://github.com/febo/pinocchio),
 
 /programs
 └── src/
-    ├── instructions/        # deposit, withdraw, borrow, repay, liquidate, flash_borrow, flash_repay, initialize
+    ├── instructions/        # deposit, withdraw, borrow, repay, liquidate, initialize
     ├── state/               # LendingPool, UserPosition, LiquidityPool, Treasury
     ├── errors.rs
     ├── math.rs
@@ -117,11 +112,9 @@ Early-stage. Core protocol implementation is in progress.
 
 - [x] Protocol design and architecture
 - [x] Core program (Pinocchio) — instructions, state, entrypoint
-- [x] Flash loans — FlashBorrow / FlashRepay with atomic enforcement
-- [x] FHE privacy layer — EncryptedPosition, EnablePrivacy + 4 private instructions, computation graph definitions, EncryptContext wrapper
-- [ ] Encrypt CPI activation (pending SDK pinocchio 0.11 support)
 - [ ] Ika dWallet integration
 - [ ] Oro/GRAIL gold collateral integration
+- [ ] FHE layer (Encrypt)
 - [ ] Oracle integration (Pyth)
 - [ ] Testnet deployment
 
