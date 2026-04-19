@@ -6,7 +6,7 @@ use pinocchio::{
     Address, ProgramResult,
 };
 
-use crate::instructions::{Borrow, Deposit, Initialize, Liquidate, Repay, Withdraw};
+use crate::instructions::{Borrow, Deposit, FlashBorrow, FlashRepay, Initialize, Liquidate, Repay, Withdraw};
 
 entrypoint!(process_instruction);
 nostd_panic_handler!();
@@ -25,8 +25,10 @@ pub fn process_instruction(
         Deposit::DISCRIMINATOR    => Deposit::from_data(rest)?.process(program_id, accounts),
         Withdraw::DISCRIMINATOR   => Withdraw::from_data(rest)?.process(program_id, accounts),
         Borrow::DISCRIMINATOR     => Borrow::from_data(rest)?.process(program_id, accounts),
-        Repay::DISCRIMINATOR      => Repay::from_data(rest)?.process(program_id, accounts),
-        Liquidate::DISCRIMINATOR  => Liquidate::from_data(rest)?.process(program_id, accounts),
-        _                         => Err(ProgramError::InvalidInstructionData),
+        Repay::DISCRIMINATOR       => Repay::from_data(rest)?.process(program_id, accounts),
+        Liquidate::DISCRIMINATOR   => Liquidate::from_data(rest)?.process(program_id, accounts),
+        FlashBorrow::DISCRIMINATOR => FlashBorrow::from_data(rest)?.process(program_id, accounts),
+        FlashRepay::DISCRIMINATOR  => FlashRepay::from_data(rest)?.process(program_id, accounts),
+        _                          => Err(ProgramError::InvalidInstructionData),
     }
 }
