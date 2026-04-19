@@ -51,6 +51,12 @@ pub enum LendError {
     PoolPaused,
     /// No fees have accumulated to collect.
     NoFeesToCollect,
+    /// Pyth price account has bad magic / type / negative price.
+    OracleInvalid,
+    /// Pyth aggregate status is not Trading (price is stale).
+    OraclePriceStale,
+    /// Provided price feed does not match the one anchored to the pool.
+    OraclePriceFeedMismatch,
 }
 
 impl From<LendError> for ProgramError {

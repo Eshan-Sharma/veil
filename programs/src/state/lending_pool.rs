@@ -1,7 +1,7 @@
 /*!
 `LendingPool` — one account per token market.
 
-Layout (repr C, 352 bytes, 16-byte aligned throughout):
+Layout (repr C, 408 bytes, 16-byte aligned throughout):
 
 | offset | size | field                  |
 |--------|------|------------------------|
@@ -32,7 +32,12 @@ Layout (repr C, 352 bytes, 16-byte aligned throughout):
 | 320    |  16  | close_factor           |
 | 336    |   8  | flash_loan_amount      |
 | 344    |   8  | flash_fee_bps          |
-| 352    |      | (end)                  |
+| 352    |  32  | pyth_price_feed        |
+| 384    |   8  | oracle_price           |
+| 392    |   8  | oracle_conf            |
+| 400    |   4  | oracle_expo            |
+| 404    |   4  | _oracle_pad            |
+| 408    |      | (end)                  |
 */
 
 use crate::math::WAD;
@@ -90,11 +95,23 @@ pub struct LendingPool {
     pub flash_loan_amount: u64,
     /// Flash loan fee in basis points (default 9 = 0.09 %).
     pub flash_fee_bps: u64,
+
+    // ── Pyth oracle ───────────────────────────────────────────────────────
+    /// Pyth legacy push-oracle price feed account address.
+    /// All-zeros means no feed has been anchored yet.
+    pub pyth_price_feed: Address,
+    /// Last cached aggregate price (raw, apply oracle_expo for USD value).
+    pub oracle_price: i64,
+    /// Last cached aggregate confidence interval.
+    pub oracle_conf: u64,
+    /// Price exponent (negative — price_usd = oracle_price × 10^oracle_expo).
+    pub oracle_expo: i32,
+    pub _oracle_pad: [u8; 4],
 }
 
 impl LendingPool {
     pub const DISCRIMINATOR: [u8; 8] = *b"VEILPOOL";
-    pub const SIZE: usize = 352;
+    pub const SIZE: usize = 408;
 
     // ── Zero-copy account access ──────────────────────────────────────────
 

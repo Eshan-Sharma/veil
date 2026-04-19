@@ -7,9 +7,9 @@ use pinocchio::{
 };
 
 use crate::instructions::{
-    Borrow, CollectFees, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, Initialize,
-    Liquidate, PausePool, PrivateBorrow, PrivateDeposit, PrivateRepay, PrivateWithdraw,
-    Repay, ResumePool, UpdatePool, Withdraw,
+    Borrow, CollectFees, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister,
+    IkaRelease, IkaSign, Initialize, Liquidate, PausePool, PrivateBorrow, PrivateDeposit,
+    PrivateRepay, PrivateWithdraw, Repay, ResumePool, UpdateOraclePrice, UpdatePool, Withdraw,
 };
 
 entrypoint!(process_instruction);
@@ -42,6 +42,10 @@ pub fn process_instruction(
         PausePool::DISCRIMINATOR       => PausePool::from_data(rest)?.process(program_id, accounts),
         ResumePool::DISCRIMINATOR      => ResumePool::from_data(rest)?.process(program_id, accounts),
         CollectFees::DISCRIMINATOR     => CollectFees::from_data(rest)?.process(program_id, accounts),
+        IkaRegister::DISCRIMINATOR     => IkaRegister::from_data(rest)?.process(program_id, accounts),
+        IkaRelease::DISCRIMINATOR      => IkaRelease::from_data(rest)?.process(program_id, accounts),
+        IkaSign::DISCRIMINATOR         => IkaSign::from_data(rest)?.process(program_id, accounts),
+        UpdateOraclePrice::DISCRIMINATOR => UpdateOraclePrice::from_data(rest)?.process(program_id, accounts),
         _                              => Err(ProgramError::InvalidInstructionData),
     }
 }
