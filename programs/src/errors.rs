@@ -39,6 +39,12 @@ pub enum LendError {
     TransferFailed,
     /// Timestamp went backwards.
     InvalidTimestamp,
+    /// Flash loan is already in progress; cannot start another.
+    FlashLoanActive,
+    /// FlashRepay called but no flash loan is in progress.
+    FlashLoanNotActive,
+    /// Repayment amount is less than borrowed + fee.
+    FlashLoanRepayInsufficient,
 }
 
 impl From<LendError> for ProgramError {

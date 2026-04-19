@@ -1,7 +1,7 @@
 /*!
 `LendingPool` — one account per token market.
 
-Layout (repr C, 336 bytes, 16-byte aligned throughout):
+Layout (repr C, 352 bytes, 16-byte aligned throughout):
 
 | offset | size | field                  |
 |--------|------|------------------------|
@@ -29,7 +29,9 @@ Layout (repr C, 336 bytes, 16-byte aligned throughout):
 | 288    |  16  | liquidation_bonus      |
 | 304    |  16  | protocol_liq_fee       |
 | 320    |  16  | close_factor           |
-| 336    |      | (end)                  |
+| 336    |   8  | flash_loan_amount      |
+| 344    |   8  | flash_fee_bps          |
+| 352    |      | (end)                  |
 */
 
 use crate::math::WAD;
@@ -79,11 +81,17 @@ pub struct LendingPool {
     pub liquidation_bonus: u128,
     pub protocol_liq_fee: u128,
     pub close_factor: u128,
+
+    // ── Flash loan state ──────────────────────────────────────────────────
+    /// Amount currently lent via an in-flight flash loan (0 = none active).
+    pub flash_loan_amount: u64,
+    /// Flash loan fee in basis points (default 9 = 0.09 %).
+    pub flash_fee_bps: u64,
 }
 
 impl LendingPool {
     pub const DISCRIMINATOR: [u8; 8] = *b"VEILPOOL";
-    pub const SIZE: usize = 336;
+    pub const SIZE: usize = 352;
 
     // ── Zero-copy account access ──────────────────────────────────────────
 
@@ -163,6 +171,10 @@ impl LendingPool {
         pool.liquidation_bonus = crate::math::LIQ_BONUS;
         pool.protocol_liq_fee = crate::math::PROTOCOL_LIQ_FEE;
         pool.close_factor = crate::math::CLOSE_FACTOR;
+
+        // Flash loan defaults.
+        pool.flash_loan_amount = 0;
+        pool.flash_fee_bps = crate::math::FLASH_FEE_BPS;
 
         Ok(())
     }

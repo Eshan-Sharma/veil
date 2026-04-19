@@ -31,6 +31,13 @@ pub const LIQ_BONUS: u128 = WAD * 5 / 100; // 5 %
 pub const PROTOCOL_LIQ_FEE: u128 = WAD / 10; // 10 % of bonus
 pub const CLOSE_FACTOR: u128 = WAD / 2; // 50 %
 
+/// Flash loan fee: 9 basis points = 0.09 %.
+pub const FLASH_FEE_BPS: u64 = 9;
+/// Share of flash fee that goes to the protocol (10 %).
+pub const FLASH_PROTOCOL_SHARE_BPS: u64 = 10; // 10% of the fee
+/// Share of flash fee that goes to LPs (90 %).
+pub const FLASH_LP_SHARE_BPS: u64 = 90; // 90% of the fee
+
 // ── Core WAD helpers ─────────────────────────────────────────────────────────
 
 /// Multiply two WAD-scaled values: (a × b) / WAD
@@ -208,6 +215,26 @@ pub fn health_factor(
 pub fn max_borrowable(deposit_balance: u64, ltv: u128) -> Result<u64, ProgramError> {
     let max = wad_mul(deposit_balance as u128, ltv)?;
     Ok(max.min(u64::MAX as u128) as u64)
+}
+
+// ── Flash loan helpers ────────────────────────────────────────────────────────
+
+/// Fee charged on a flash loan: amount × fee_bps / 10_000
+pub fn flash_fee(amount: u64, fee_bps: u64) -> Result<u64, ProgramError> {
+    (amount as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or(ProgramError::ArithmeticOverflow)?
+        .checked_div(10_000)
+        .map(|v| v.min(u64::MAX as u128) as u64)
+        .ok_or(ProgramError::ArithmeticOverflow)
+}
+
+/// Split `fee` into (lp_portion, protocol_portion).
+/// LP gets 90 %, protocol gets 10 % (rounding leaves remainder with LPs).
+pub fn split_flash_fee(fee: u64) -> (u64, u64) {
+    let protocol = fee / 10;
+    let lp = fee.saturating_sub(protocol);
+    (lp, protocol)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
