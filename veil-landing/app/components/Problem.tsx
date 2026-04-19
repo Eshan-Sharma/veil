@@ -22,7 +22,7 @@ export default function Problem() {
             <span className="serif-italic text-white/80">why billions still sit still.</span>
           </h2>
           <p className="mt-5 max-w-2xl text-[16px] leading-relaxed text-white/65">
-            Every position, balance, and liquidation price is published to the world, and any non-Solana asset has to trust a bridge. That's a non-starter for funds, market makers and DAO treasuries. Veil closes both gaps with a single protocol.
+            Every position, balance, and liquidation price is published to the world, and any non-Solana asset — including BTC, ETH, and physical gold — has to trust a bridge or custodian to get on-chain. That's a non-starter for funds, market makers, and institutions. Veil closes both gaps with a single protocol.
           </p>
         </div>
 
@@ -39,7 +39,7 @@ export default function Problem() {
               <span className="serif-italic text-rose-200">on the wrong chain.</span>
             </h3>
             <p className="mt-3 text-[14.5px] leading-relaxed text-white/65">
-              The world's BTC and ETH can't be pledged on Solana without a bridge. Bridges introduce custody risk, synthetic exposure and trusted third-parties — so institutions keep capital idle instead of pledging it.
+              The world's BTC, ETH, and physical gold can't be pledged on Solana without a bridge or a custodian. Bridges introduce custody risk and trusted third-parties — so institutions keep trillions in capital idle instead of pledging it.
             </p>
             <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-4 mono text-[11.5px] leading-5 text-white/70">
               <div className="flex items-center justify-between text-white/40">
@@ -87,7 +87,7 @@ export default function Problem() {
 
         <div className="mt-10 flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-white/10 bg-gradient-to-r from-white/[0.04] via-white/[0.02] to-white/[0.04] p-6">
           <p className="text-[15px] text-white/80">
-            <span className="serif-italic text-white">Veil closes both at once</span> — native collateral via Ika dWallet, encrypted state via Encrypt FHE, coordinated by a Pinocchio program on Solana.
+            <span className="serif-italic text-white">Veil closes both at once</span> — native BTC/ETH via Ika dWallet, physical gold via Oro/GRAIL, encrypted state via Encrypt FHE, all coordinated by a Pinocchio program on Solana.
           </p>
           <a href="#how" className="inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-[13px] font-semibold text-zinc-950 transition hover:bg-white/90">
             See how the protocol works

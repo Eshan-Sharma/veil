@@ -23,7 +23,7 @@ export default function CTA() {
                 <span className="serif-italic text-white/80">Stay off-stage.</span>
               </h2>
               <p className="mt-5 max-w-xl text-[16px] leading-relaxed text-white/65">
-                Pledge native BTC or ETH, borrow in private, and keep every balance encrypted. Solana coordinates; your capital stays where it belongs.
+                Pledge native BTC, physical gold, or any on-chain asset. Borrow in private. Keep every balance encrypted. Solana coordinates — your capital stays where it belongs.
               </p>
               <div className="mt-8 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
                 <a href="#" className="group inline-flex h-12 items-center gap-2 rounded-full bg-white pl-6 pr-5 text-[14.5px] font-semibold text-zinc-950 transition hover:bg-white/90">

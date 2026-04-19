@@ -1,5 +1,9 @@
 const qs = [
   {
+    q: "How does physical gold work as collateral?",
+    a: "Veil integrates Oro's GRAIL platform, which is digital gold infrastructure for modern finance. Oro handles the hard parts — physical custody, regulatory compliance, KYC, and on-chain settlement. Users pledge gold-backed assets through Oro's self-custody model; Veil's Solana program tracks the position and enforces collateral logic. This makes Veil the first DeFi lending protocol where physical gold works as productive collateral alongside native crypto.",
+  },
+  {
     q: "How does Veil hold native BTC without bridging?",
     a: "Veil uses an Ika dWallet — a programmable wallet jointly controlled by you and Ika's MPC network. Your Bitcoin stays on Bitcoin as native UTXOs. A Solana program sends signing instructions; the dWallet co-signs. No wrapped token, no custodian.",
   },

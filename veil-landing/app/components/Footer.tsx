@@ -14,7 +14,7 @@ export default function Footer() {
             <span className="text-[17px] font-semibold tracking-tight text-zinc-900">Veil</span>
           </div>
           <p className="mt-4 text-[13.5px] leading-relaxed text-zinc-500">
-            Private, cross-chain lending on Solana. Native BTC / ETH collateral, encrypted positions via FHE, no bridges in the critical path.
+            The first lending protocol on Solana for native BTC, physical gold, or any on-chain asset — with an optional privacy layer. No bridges, no wrapping.
           </p>
         </div>
 
@@ -35,6 +35,7 @@ export default function Footer() {
             ["Solana", "https://solana.com"],
             ["Pinocchio", "https://github.com/anza-xyz/pinocchio"],
             ["Ika dWallet", "https://github.com/dwallet-labs/ika"],
+            ["Oro · GRAIL", "https://docs.grail.oro.finance/"],
             ["Encrypt · FHE", "https://docs.encrypt.xyz"],
             ["Pyth", "https://pyth.network"],
           ]} />
