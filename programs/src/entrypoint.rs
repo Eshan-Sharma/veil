@@ -6,7 +6,10 @@ use pinocchio::{
     Address, ProgramResult,
 };
 
-use crate::instructions::{Borrow, Deposit, FlashBorrow, FlashRepay, Initialize, Liquidate, Repay, Withdraw};
+use crate::instructions::{
+    Borrow, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, Initialize, Liquidate,
+    PrivateBorrow, PrivateDeposit, PrivateRepay, PrivateWithdraw, Repay, Withdraw,
+};
 
 entrypoint!(process_instruction);
 nostd_panic_handler!();
@@ -27,8 +30,13 @@ pub fn process_instruction(
         Borrow::DISCRIMINATOR     => Borrow::from_data(rest)?.process(program_id, accounts),
         Repay::DISCRIMINATOR       => Repay::from_data(rest)?.process(program_id, accounts),
         Liquidate::DISCRIMINATOR   => Liquidate::from_data(rest)?.process(program_id, accounts),
-        FlashBorrow::DISCRIMINATOR => FlashBorrow::from_data(rest)?.process(program_id, accounts),
-        FlashRepay::DISCRIMINATOR  => FlashRepay::from_data(rest)?.process(program_id, accounts),
-        _                          => Err(ProgramError::InvalidInstructionData),
+        FlashBorrow::DISCRIMINATOR    => FlashBorrow::from_data(rest)?.process(program_id, accounts),
+        FlashRepay::DISCRIMINATOR     => FlashRepay::from_data(rest)?.process(program_id, accounts),
+        EnablePrivacy::DISCRIMINATOR  => EnablePrivacy::from_data(rest)?.process(program_id, accounts),
+        PrivateDeposit::DISCRIMINATOR => PrivateDeposit::from_data(rest)?.process(program_id, accounts),
+        PrivateBorrow::DISCRIMINATOR  => PrivateBorrow::from_data(rest)?.process(program_id, accounts),
+        PrivateRepay::DISCRIMINATOR   => PrivateRepay::from_data(rest)?.process(program_id, accounts),
+        PrivateWithdraw::DISCRIMINATOR => PrivateWithdraw::from_data(rest)?.process(program_id, accounts),
+        _                             => Err(ProgramError::InvalidInstructionData),
     }
 }

@@ -118,9 +118,10 @@ Early-stage. Core protocol implementation is in progress.
 - [x] Protocol design and architecture
 - [x] Core program (Pinocchio) — instructions, state, entrypoint
 - [x] Flash loans — FlashBorrow / FlashRepay with atomic enforcement
+- [x] FHE privacy layer — EncryptedPosition, EnablePrivacy + 4 private instructions, computation graph definitions, EncryptContext wrapper
+- [ ] Encrypt CPI activation (pending SDK pinocchio 0.11 support)
 - [ ] Ika dWallet integration
 - [ ] Oro/GRAIL gold collateral integration
-- [ ] FHE layer (Encrypt)
 - [ ] Oracle integration (Pyth)
 - [ ] Testnet deployment
 

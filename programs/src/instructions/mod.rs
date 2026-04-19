@@ -1,17 +1,27 @@
 mod borrow;
 mod deposit;
+mod enable_privacy;
 mod flash_borrow;
 mod flash_repay;
 mod initialize;
 mod liquidate;
+mod private_borrow;
+mod private_deposit;
+mod private_repay;
+mod private_withdraw;
 mod repay;
 mod withdraw;
 
 pub use borrow::Borrow;
 pub use deposit::Deposit;
+pub use enable_privacy::EnablePrivacy;
 pub use flash_borrow::FlashBorrow;
 pub use flash_repay::FlashRepay;
 pub use initialize::Initialize;
 pub use liquidate::Liquidate;
+pub use private_borrow::PrivateBorrow;
+pub use private_deposit::PrivateDeposit;
+pub use private_repay::PrivateRepay;
+pub use private_withdraw::PrivateWithdraw;
 pub use repay::Repay;
 pub use withdraw::Withdraw;
