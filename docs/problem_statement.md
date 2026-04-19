@@ -34,9 +34,36 @@ This makes Veil the first DeFi lending protocol where native BTC, native ETH, an
 
 ## Optional Privacy Layer
 
-For the transparency problem, Veil integrates [Encrypt's](https://docs.encrypt.xyz/getting-started/installation) FHE infrastructure. Each user position has a privacy toggle. When enabled, balances and borrow amounts are stored as ciphertext on-chain and health factor computations execute over encrypted data using the REFHE scheme.
+For the transparency problem, Veil integrates [Encrypt's](https://docs.encrypt.xyz/) FHE infrastructure. Privacy is a per-position opt-in toggle with no impact on users who don't use it.
 
-Observers see nothing — not the collateral amount, not the debt, not the liquidation price. The protocol's core invariants (solvency, health factor enforcement) are maintained without exposing any position data publicly. Privacy is opt-in: users who don't need it incur no additional cost.
+### How it works
+
+Calling `EnablePrivacy` (instruction 8) creates an `EncryptedPosition` account alongside the existing `UserPosition`. The Encrypt program creates two ciphertext accounts — one holding the encrypted deposit balance (`enc_deposit`), one holding the encrypted debt (`enc_debt`). Each is a 32-byte handle pointing at a ciphertext account owned by the Encrypt program.
+
+From that point forward, the five private instruction variants (`PrivateDeposit`, `PrivateBorrow`, `PrivateRepay`, `PrivateWithdraw`, and `EnablePrivacy`) keep the ciphertext accounts in sync. Each instruction:
+
+1. Executes the standard lending logic (same token transfers, same health factor enforcement via plaintext `UserPosition`).
+2. Creates an ephemeral plaintext ciphertext for the instruction's amount.
+3. Submits an FHE computation graph to the Encrypt program via CPI — e.g., `add_deposit`, `sub_debt`.
+4. Optionally submits an `is_healthy` graph that produces an encrypted `EBool` result, allowing off-chain verifiers to audit health without seeing position values.
+
+An off-chain executor evaluates the graph and commits updated ciphertext. To any RPC observer, the position account exposes only opaque 32-byte handles.
+
+### Solvency and privacy are joint properties
+
+The `UserPosition` is never removed. It remains the authoritative source of truth for on-chain health factor enforcement — the protocol cannot be exploited by manipulating ciphertext. Privacy provides observer confidentiality; the program proves solvency in plaintext.
+
+### Implementation status
+
+The Encrypt SDK (`encrypt-pinocchio`) currently requires pinocchio 0.10.x. Veil's core program targets 0.11.x. All five private instructions, the `EncryptedPosition` account, the `EncryptContext` wrapper, and the FHE graph definitions are fully implemented and wired into the entrypoint. The `execute_graph` CPI call is stubbed and activates once the SDK updates its pinocchio dependency.
+
+Encrypt program ID (devnet): `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8`
+
+## Flash Loans
+
+Veil includes a native flash loan primitive. A borrower can take any amount up to the pool's free liquidity within a single Solana transaction. The funds are transferred out at the start and must be returned — with a 0.09 % fee — by the end of the same transaction. If the repayment instruction is missing or the amount falls short, the transaction reverts atomically and no funds leave the pool.
+
+The fee is split 90 % to liquidity providers and 10 % to the protocol. Flash loans make arbitrage, liquidation bots, and on-chain collateral swaps capital-efficient: no upfront collateral required, just atomically correct execution.
 
 ## Efficient Execution
 
@@ -44,4 +71,4 @@ The core protocol — liquidity pool, kink-curve interest rate model, health fac
 
 ## Architecture Philosophy
 
-Veil is designed to work today as a functional lending protocol and extend in place as Ika and Encrypt reach mainnet. No migration required. Each integration layer — cross-chain collateral, gold collateral, FHE privacy — is independently upgradeable without disrupting the core protocol.
+Veil is designed to work today as a functional lending protocol and extend in place as Ika and Encrypt reach mainnet. No migration required. Each integration layer — cross-chain collateral, gold collateral, FHE privacy, and flash loans — is independently upgradeable without disrupting the core protocol.

@@ -39,6 +39,26 @@ pub enum LendError {
     TransferFailed,
     /// Timestamp went backwards.
     InvalidTimestamp,
+    /// Flash loan is already in progress; cannot start another.
+    FlashLoanActive,
+    /// FlashRepay called but no flash loan is in progress.
+    FlashLoanNotActive,
+    /// Repayment amount is less than borrowed + fee.
+    FlashLoanRepayInsufficient,
+    /// Signer is not the pool authority.
+    Unauthorized,
+    /// Pool is paused; deposits and borrows are blocked.
+    PoolPaused,
+    /// No fees have accumulated to collect.
+    NoFeesToCollect,
+    /// Pyth price account has bad magic / type / negative price.
+    OracleInvalid,
+    /// Pyth aggregate status is not Trading (price is stale).
+    OraclePriceStale,
+    /// Provided price feed does not match the one anchored to the pool.
+    OraclePriceFeedMismatch,
+    /// Pyth confidence interval exceeds 2 % of price — data too uncertain.
+    OracleConfTooWide,
 }
 
 impl From<LendError> for ProgramError {

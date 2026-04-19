@@ -66,6 +66,9 @@ impl Deposit {
         let clock = Clock::get()?;
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            if pool.paused != 0 {
+                return Err(LendError::PoolPaused.into());
+            }
             pool.accrue_interest(clock.unix_timestamp)?;
         }
 
@@ -118,6 +121,9 @@ impl Deposit {
                 si,
                 bi,
             )?;
+        } else {
+            let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(&user_addr, &pool_addr)?;
         }
 
         // ── Compute shares ────────────────────────────────────────────────

@@ -70,6 +70,7 @@ impl Withdraw {
         let (token_amount, authority_bump) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             if pos.deposit_shares < self.shares {
                 return Err(LendError::ExceedsDepositBalance.into());
