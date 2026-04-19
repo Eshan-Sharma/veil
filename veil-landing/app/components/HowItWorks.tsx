@@ -1,11 +1,11 @@
 const steps = [
   {
     n: "01",
-    eyebrow: "Pledge native",
-    title: "Lock BTC or ETH in an Ika dWallet — on its own chain.",
-    body: "A dWallet is jointly controlled by you and Ika's MPC network. Assets never leave their native chain; no custodian, no wrap, no bridge contract in the critical path.",
+    eyebrow: "Pledge collateral",
+    title: "Lock BTC, ETH, or physical gold — on its own chain.",
+    body: "BTC and ETH stay in an Ika dWallet, jointly controlled by you and Ika's MPC network — no bridge, no custodian. Physical gold is pledged via Oro's GRAIL platform, which handles custody and compliance so you don't have to.",
     accent: "from-amber-400 to-orange-500",
-    chips: ["Native BTC", "Native ETH", "MPC 2-of-3", "Programmable signing"],
+    chips: ["Native BTC", "Native ETH", "Physical Gold via Oro", "MPC 2-of-3"],
   },
   {
     n: "02",
@@ -44,7 +44,7 @@ export default function HowItWorks() {
           Four moves, <span className="serif-italic text-violet-700">one protocol.</span>
         </h2>
         <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-zinc-600">
-          Solana becomes the coordination layer for capital from every chain. Privacy is a toggle, not an L2 detour.
+          Solana coordinates capital from every chain — native BTC, native ETH, and physical gold. Privacy is a toggle, not an L2 detour.
         </p>
       </div>
 

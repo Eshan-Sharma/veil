@@ -32,6 +32,17 @@ const personas = [
       <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 10l9-6 9 6v2H3v-2zm1 3h16v7H4v-7zm2 2v3h2v-3H6zm4 0v3h2v-3h-2zm4 0v3h2v-3h-2z"/></svg>
     ),
   },
+  {
+    name: "Diana",
+    role: "Family Office · Gold Holder",
+    quote: "My gold has sat in custody for a decade earning nothing. That has to change.",
+    priorities: ["Gold productivity", "TradFi-grade custody", "No counterparty risk", "Simple integration"],
+    win: "Pledge physical gold via Oro/GRAIL as DeFi collateral — the first time gold has ever been productive on-chain.",
+    gradient: "from-yellow-400 to-amber-600",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2l2.4 5.2 5.6.8-4 4 .9 5.6L12 15l-4.9 2.6.9-5.6-4-4 5.6-.8z"/></svg>
+    ),
+  },
 ];
 
 export default function Personas() {
@@ -47,11 +58,11 @@ export default function Personas() {
             <span className="serif-italic text-violet-700">can't be seen moving.</span>
           </h2>
           <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-zinc-600">
-            Portfolio managers, market makers and DAO treasuries each get the same primitives — native collateral, encrypted state, cross-chain settlement — with different use cases.
+            Portfolio managers, market makers, DAO treasuries, and gold holders each get the same primitives — native collateral, encrypted state, cross-chain settlement — with different use cases.
           </p>
         </div>
 
-        <div className="mt-14 grid grid-cols-1 gap-5 md:grid-cols-3">
+        <div className="mt-14 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
           {personas.map((p) => (
             <article key={p.name} className="group relative overflow-hidden rounded-3xl border border-zinc-200 bg-white/80 p-7 backdrop-blur transition hover:shadow-[0_30px_80px_-40px_rgba(76,29,149,0.35)]">
               <div className="flex items-center gap-3">

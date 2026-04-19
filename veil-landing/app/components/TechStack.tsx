@@ -30,6 +30,16 @@ const items = [
     ),
   },
   {
+    name: "Oro · GRAIL",
+    role: "Physical gold infrastructure",
+    body: "Oro's GRAIL platform handles gold custody, regulatory compliance, KYC, and on-chain settlement — so users can pledge physical gold as DeFi collateral for the first time.",
+    tag: "Gold",
+    gradient: "from-yellow-400 to-amber-600",
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2l2.4 5.2 5.6.8-4 4 .9 5.6L12 15l-4.9 2.6.9-5.6-4-4 5.6-.8z"/></svg>
+    ),
+  },
+  {
     name: "Encrypt · REFHE",
     role: "FHE privacy layer",
     body: "Balances and debt stored as ciphertext; health factor computed homomorphically. Invariants are provable without decryption.",
@@ -42,7 +52,7 @@ const items = [
   {
     name: "Pyth",
     role: "Price oracle",
-    body: "Sub-second, first-party prices for BTC, ETH and quote assets. Fuels the kink rate curve and liquidation thresholds.",
+    body: "Sub-second, first-party prices for BTC, ETH, XAU, and quote assets. Fuels the kink rate curve and liquidation thresholds.",
     tag: "Oracle",
     gradient: "from-blue-500 to-sky-500",
     icon: (
@@ -74,11 +84,11 @@ export default function TechStack() {
             <span className="serif-italic text-violet-700">upgrade in place.</span>
           </h2>
           <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-zinc-600">
-            Veil works today as a full lending protocol, and upgrades without migration as Ika and Encrypt reach mainnet.
+            Veil works today as a full lending protocol, and upgrades without migration as Ika and Encrypt reach mainnet. Oro/GRAIL makes physical gold live from day one.
           </p>
         </div>
 
-        <div className="mt-14 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-14 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {items.map((it) => (
             <div key={it.name} className="group relative overflow-hidden rounded-3xl border border-zinc-200 bg-white/80 p-6 backdrop-blur transition hover:shadow-[0_30px_60px_-30px_rgba(76,29,149,0.35)]">
               <div className="flex items-center justify-between">
