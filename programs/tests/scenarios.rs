@@ -7,15 +7,24 @@ machines directly on the structs (bypassing AccountView, CPI, and syscalls) and
 asserts that the accounting adds up correctly.
 */
 
+mod common;
+
 use veil_lending::{
     errors::LendError,
+    instructions::{CollectFees, PausePool, ResumePool, UpdatePool},
     math::{
         self, current_borrow_balance, current_deposit_balance, deposit_to_shares, flash_fee,
         health_factor, max_borrowable, split_flash_fee, wad_mul,
-        CLOSE_FACTOR, FLASH_FEE_BPS, LIQ_BONUS, LIQ_THRESHOLD, LTV, PROTOCOL_LIQ_FEE, WAD,
+        BASE_RATE, CLOSE_FACTOR, FLASH_FEE_BPS, LIQ_BONUS, LIQ_THRESHOLD, LTV,
+        OPTIMAL_UTIL, PROTOCOL_LIQ_FEE, RESERVE_FACTOR, SLOPE1, SLOPE2, WAD,
     },
     state::LendingPool,
 };
+use common::{make_pool, pool_bytes, RawAccount};
+
+const AUTHORITY: [u8; 32] = [1u8; 32];
+const OTHER: [u8; 32]     = [2u8; 32];
+const PROGRAM: pinocchio::Address = pinocchio::Address::new_from_array([9u8; 32]);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -503,6 +512,9 @@ fn lend_error_codes_are_unique() {
         LendError::FlashLoanActive as u32,
         LendError::FlashLoanNotActive as u32,
         LendError::FlashLoanRepayInsufficient as u32,
+        LendError::Unauthorized as u32,
+        LendError::PoolPaused as u32,
+        LendError::NoFeesToCollect as u32,
     ];
     let mut seen = std::collections::HashSet::new();
     for &code in &codes {
@@ -512,7 +524,9 @@ fn lend_error_codes_are_unique() {
 
 #[test]
 fn instruction_discriminators_are_unique_and_sequential() {
-    use veil_lending::instructions::{Borrow, Deposit, FlashBorrow, FlashRepay, Initialize, Liquidate, Repay, Withdraw};
+    use veil_lending::instructions::{
+        Borrow, Deposit, FlashBorrow, FlashRepay, Initialize, Liquidate, Repay, Withdraw,
+    };
     let discs = [
         Initialize::DISCRIMINATOR,
         Deposit::DISCRIMINATOR,
@@ -522,13 +536,282 @@ fn instruction_discriminators_are_unique_and_sequential() {
         Liquidate::DISCRIMINATOR,
         FlashBorrow::DISCRIMINATOR,
         FlashRepay::DISCRIMINATOR,
+        UpdatePool::DISCRIMINATOR,
+        PausePool::DISCRIMINATOR,
+        ResumePool::DISCRIMINATOR,
+        CollectFees::DISCRIMINATOR,
     ];
     let mut seen = std::collections::HashSet::new();
     for &d in &discs {
         assert!(seen.insert(d), "duplicate discriminator: {}", d);
     }
-    // All 8 discriminators 0..=7
+    // 12 discriminators 0..=12 plus 14, 15, 16
     let mut sorted = discs.to_vec();
     sorted.sort();
-    assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16]);
+}
+
+// ── UpdatePool authority / param tests ───────────────────────────────────────
+
+fn update_pool_data(
+    base_rate: u128, optimal_utilization: u128, slope1: u128, slope2: u128,
+    reserve_factor: u128, ltv: u128, liquidation_threshold: u128,
+    liquidation_bonus: u128, protocol_liq_fee: u128, close_factor: u128,
+    flash_fee_bps: u64,
+) -> Vec<u8> {
+    let mut d = Vec::with_capacity(168);
+    for v in [base_rate, optimal_utilization, slope1, slope2, reserve_factor,
+              ltv, liquidation_threshold, liquidation_bonus, protocol_liq_fee, close_factor] {
+        d.extend_from_slice(&v.to_le_bytes());
+    }
+    d.extend_from_slice(&flash_fee_bps.to_le_bytes());
+    d
+}
+
+fn default_update_data() -> Vec<u8> {
+    update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
+                     LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 9)
+}
+
+#[test]
+fn update_pool_wrong_authority_returns_unauthorized() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(OTHER, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&default_update_data()).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::Unauthorized.into()));
+}
+
+#[test]
+fn update_pool_non_signer_returns_missing_signature() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, false, false, &[]); // not a signer
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&default_update_data()).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::MissingSignature.into()));
+}
+
+#[test]
+fn update_pool_correct_authority_succeeds() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&default_update_data()).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert!(result.is_ok(), "correct authority must succeed: {:?}", result);
+}
+
+#[test]
+fn update_pool_writes_params_to_pool() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let new_flash_bps: u64 = 50;
+    let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
+                             LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, new_flash_bps);
+    unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts).unwrap();
+        let updated = pool_acct.read_data_as::<LendingPool>();
+        assert_eq!(updated.flash_fee_bps, new_flash_bps);
+        assert_eq!(updated.ltv, LTV);
+    }
+}
+
+#[test]
+fn update_pool_rejects_ltv_ge_liq_threshold() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
+                             LIQ_THRESHOLD, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 9);
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+}
+
+#[test]
+fn update_pool_rejects_flash_fee_over_10000() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
+                             LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 10_001);
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+}
+
+// ── PausePool authority tests ─────────────────────────────────────────────────
+
+#[test]
+fn pause_pool_wrong_authority_returns_unauthorized() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(OTHER, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        PausePool.process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::Unauthorized.into()));
+}
+
+#[test]
+fn pause_pool_non_signer_returns_missing_signature() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, false, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        PausePool.process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::MissingSignature.into()));
+}
+
+#[test]
+fn pause_pool_correct_authority_sets_paused() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        PausePool.process(&PROGRAM, &mut accounts).unwrap();
+        let updated = pool_acct.read_data_as::<LendingPool>();
+        assert_eq!(updated.paused, 1);
+    }
+}
+
+// ── ResumePool authority tests ────────────────────────────────────────────────
+
+#[test]
+fn resume_pool_wrong_authority_returns_unauthorized() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(OTHER, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        ResumePool.process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::Unauthorized.into()));
+}
+
+#[test]
+fn resume_pool_non_signer_returns_missing_signature() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, false, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    let result = unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        ResumePool.process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::MissingSignature.into()));
+}
+
+#[test]
+fn resume_pool_clears_paused_flag() {
+    let mut pool = make_pool(AUTHORITY, 0);
+    pool.paused = 1;
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        ResumePool.process(&PROGRAM, &mut accounts).unwrap();
+        let updated = pool_acct.read_data_as::<LendingPool>();
+        assert_eq!(updated.paused, 0);
+    }
+}
+
+#[test]
+fn pause_resume_round_trip() {
+    let pool = make_pool(AUTHORITY, 0);
+    let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
+    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+
+    unsafe {
+        let mut accounts = [auth.view(), pool_acct.view()];
+        PausePool.process(&PROGRAM, &mut accounts).unwrap();
+        let mid = pool_acct.read_data_as::<LendingPool>();
+        assert_eq!(mid.paused, 1, "must be paused");
+
+        let mut accounts2 = [auth.view(), pool_acct.view()];
+        ResumePool.process(&PROGRAM, &mut accounts2).unwrap();
+        let end = pool_acct.read_data_as::<LendingPool>();
+        assert_eq!(end.paused, 0, "must be unpaused");
+    }
+}
+
+// ── CollectFees authority tests ───────────────────────────────────────────────
+// The token CPI cannot run in unit/integration tests (no real runtime).
+// We test every check that fires before the CPI: signature, authority, zero fees.
+
+fn collect_accounts(signer_key: [u8; 32], is_signer: bool, fees: u64) -> [RawAccount; 6] {
+    let pool = make_pool(AUTHORITY, fees);
+    [
+        RawAccount::new(signer_key, is_signer, false, &[]),          // [0] authority
+        RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool)), // [1] pool
+        RawAccount::new([0u8; 32], false, true, &[]),                // [2] vault
+        RawAccount::new([0u8; 32], false, true, &[]),                // [3] treasury
+        RawAccount::new([0u8; 32], false, false, &[]),               // [4] pool_authority
+        RawAccount::new([0u8; 32], false, false, &[]),               // [5] token_program
+    ]
+}
+
+#[test]
+fn collect_fees_non_signer_returns_missing_signature() {
+    let mut accts = collect_accounts(AUTHORITY, false, 1_000);
+    let result = unsafe {
+        let mut views = [
+            accts[0].view(), accts[1].view(), accts[2].view(),
+            accts[3].view(), accts[4].view(), accts[5].view(),
+        ];
+        CollectFees.process(&PROGRAM, &mut views)
+    };
+    assert_eq!(result, Err(LendError::MissingSignature.into()));
+}
+
+#[test]
+fn collect_fees_wrong_authority_returns_unauthorized() {
+    let mut accts = collect_accounts(OTHER, true, 1_000);
+    let result = unsafe {
+        let mut views = [
+            accts[0].view(), accts[1].view(), accts[2].view(),
+            accts[3].view(), accts[4].view(), accts[5].view(),
+        ];
+        CollectFees.process(&PROGRAM, &mut views)
+    };
+    assert_eq!(result, Err(LendError::Unauthorized.into()));
+}
+
+#[test]
+fn collect_fees_zero_fees_returns_no_fees_to_collect() {
+    let mut accts = collect_accounts(AUTHORITY, true, 0);
+    let result = unsafe {
+        let mut views = [
+            accts[0].view(), accts[1].view(), accts[2].view(),
+            accts[3].view(), accts[4].view(), accts[5].view(),
+        ];
+        CollectFees.process(&PROGRAM, &mut views)
+    };
+    assert_eq!(result, Err(LendError::NoFeesToCollect.into()));
 }
