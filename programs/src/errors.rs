@@ -45,6 +45,12 @@ pub enum LendError {
     FlashLoanNotActive,
     /// Repayment amount is less than borrowed + fee.
     FlashLoanRepayInsufficient,
+    /// Signer is not the pool authority.
+    Unauthorized,
+    /// Pool is paused; deposits and borrows are blocked.
+    PoolPaused,
+    /// No fees have accumulated to collect.
+    NoFeesToCollect,
 }
 
 impl From<LendError> for ProgramError {

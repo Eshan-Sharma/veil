@@ -16,7 +16,8 @@ Layout (repr C, 352 bytes, 16-byte aligned throughout):
 | 136    |   1  | authority_bump         |
 | 137    |   1  | pool_bump              |
 | 138    |   1  | vault_bump             |
-| 139    |   5  | _pad                   |
+| 139    |   1  | paused                 |
+| 140    |   4  | _pad                   |
 | 144    |  16  | borrow_index           |
 | 160    |  16  | supply_index           |
 | 176    |  16  | base_rate              |
@@ -62,7 +63,9 @@ pub struct LendingPool {
     pub authority_bump: u8,
     pub pool_bump: u8,
     pub vault_bump: u8,
-    pub _pad: [u8; 5],
+    /// Non-zero when the pool is paused; deposits and borrows are blocked.
+    pub paused: u8,
+    pub _pad: [u8; 4],
 
     // ── Interest indices (WAD = 1e18) ─────────────────────────────────────
     pub borrow_index: u128,
