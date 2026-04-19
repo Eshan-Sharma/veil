@@ -153,3 +153,58 @@ details > summary::-webkit-details-marker {
 details[open] .faq-caret {
   transform: rotate(45deg);
 }
+
+/* ── dApp-specific styles ──────────────────────────────────────────────────── */
+.pool-row:hover { background: rgba(109,40,217,.03); }
+
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(11,11,16,.35);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeRise .15s ease-out;
+}
+
+.toggle-track {
+  position: relative; width: 32px; height: 18px;
+  border-radius: 9px; background: #e7e7ec;
+  cursor: pointer; transition: background .2s; flex-shrink: 0;
+}
+.toggle-track.on { background: #6d28d9; }
+.toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 12px; height: 12px;
+  background: #fff; border-radius: 50%;
+  transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+.toggle-track.on .toggle-thumb { transform: translateX(14px); }
+
+.dapp-tab {
+  padding: 6px 14px; border-radius: 999px;
+  font-size: 13.5px; cursor: pointer;
+  color: #5b5b66; font-weight: 500;
+  transition: all .15s;
+  border: 1px solid transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+.dapp-tab.active {
+  background: white; color: #0b0b10;
+  border-color: #e7e7ec;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .01em; }
+.tag-ika  { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+.tag-enc  { background: #ede9fe; color: #4c1d95; border: 1px solid #c4b5fd; }
+.tag-oro  { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+.tag-native { background: #f4f4f5; color: #52525b; border: 1px solid #e4e4e7; }
+
+.btn-supply { padding: 5px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: #0b0b10; color: #fff; border: none; cursor: pointer; transition: opacity .15s; }
+.btn-supply:hover { opacity: .85; }
+.btn-borrow { padding: 5px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: transparent; color: #0b0b10; border: 1px solid #e7e7ec; cursor: pointer; transition: background .15s; }
+.btn-borrow:hover { background: #f4f4f5; }
+
+.hf-bar-wrap { height: 5px; background: #f0f0f3; border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.hf-bar { height: 100%; border-radius: 3px; transition: width .6s; }
