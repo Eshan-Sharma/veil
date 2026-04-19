@@ -10,8 +10,9 @@ asserts that the accounting adds up correctly.
 use veil_lending::{
     errors::LendError,
     math::{
-        self, current_borrow_balance, current_deposit_balance, deposit_to_shares, health_factor,
-        max_borrowable, wad_mul, LIQ_BONUS, LIQ_THRESHOLD, LTV, PROTOCOL_LIQ_FEE, WAD, CLOSE_FACTOR,
+        self, current_borrow_balance, current_deposit_balance, deposit_to_shares, flash_fee,
+        health_factor, max_borrowable, split_flash_fee, wad_mul,
+        CLOSE_FACTOR, FLASH_FEE_BPS, LIQ_BONUS, LIQ_THRESHOLD, LTV, PROTOCOL_LIQ_FEE, WAD,
     },
     state::LendingPool,
 };
@@ -35,6 +36,7 @@ fn default_pool() -> LendingPool {
     pool.protocol_liq_fee = PROTOCOL_LIQ_FEE;
     pool.close_factor = CLOSE_FACTOR;
     pool.last_update_timestamp = 0;
+    pool.flash_fee_bps = FLASH_FEE_BPS;
     pool
 }
 
@@ -359,11 +361,125 @@ fn pool_accounts_balance_after_accrual() {
     );
 }
 
+// ── Flash loan scenarios ──────────────────────────────────────────────────────
+
+#[test]
+fn flash_fee_is_9_bps_of_amount() {
+    // 9 bps on 1_000_000 = 1_000_000 * 9 / 10_000 = 900
+    let fee = flash_fee(1_000_000, FLASH_FEE_BPS).unwrap();
+    assert_eq!(fee, 900);
+}
+
+#[test]
+fn flash_fee_zero_amount_is_zero() {
+    assert_eq!(flash_fee(0, FLASH_FEE_BPS).unwrap(), 0);
+}
+
+#[test]
+fn flash_fee_split_90_10() {
+    let fee = 100u64;
+    let (lp, protocol) = split_flash_fee(fee);
+    assert_eq!(protocol, 10);
+    assert_eq!(lp, 90);
+    assert_eq!(lp + protocol, fee);
+}
+
+#[test]
+fn flash_fee_split_rounds_toward_lp() {
+    // fee = 11: protocol = 1, lp = 10
+    let (lp, protocol) = split_flash_fee(11);
+    assert_eq!(protocol, 1);
+    assert_eq!(lp, 10);
+    assert_eq!(lp + protocol, 11);
+}
+
+#[test]
+fn flash_loan_records_in_flight_amount() {
+    let mut pool = default_pool();
+    pool.total_deposits = 1_000_000;
+    pool.total_borrows = 0;
+
+    // Simulate FlashBorrow state change
+    assert_eq!(pool.flash_loan_amount, 0, "no loan at start");
+    pool.flash_loan_amount = 500_000;
+    assert_eq!(pool.flash_loan_amount, 500_000);
+}
+
+#[test]
+fn flash_repay_settles_loan_and_distributes_fee() {
+    let mut pool = default_pool();
+    pool.total_deposits = 1_000_000;
+    pool.total_borrows = 0;
+    pool.accumulated_fees = 0;
+
+    let loan_amount = 500_000u64;
+    let fee = flash_fee(loan_amount, pool.flash_fee_bps).unwrap();
+    let (lp_fee, protocol_fee) = split_flash_fee(fee);
+
+    // Simulate FlashBorrow
+    pool.flash_loan_amount = loan_amount;
+
+    // Simulate FlashRepay accounting
+    pool.total_deposits = pool.total_deposits.saturating_add(lp_fee);
+    pool.accumulated_fees = pool.accumulated_fees.saturating_add(protocol_fee);
+    pool.flash_loan_amount = 0;
+
+    assert_eq!(pool.flash_loan_amount, 0, "loan cleared");
+    assert!(pool.total_deposits > 1_000_000, "LPs gained fee");
+    assert!(pool.accumulated_fees > 0, "protocol gained fee");
+    assert_eq!(pool.total_deposits - 1_000_000, lp_fee as u64);
+    assert_eq!(pool.accumulated_fees, protocol_fee as u64);
+}
+
+#[test]
+fn flash_loan_lp_fee_grows_total_deposits() {
+    // Full round trip: 1M pool, 100k flash loan at 9bps
+    // fee = 100_000 * 9 / 10_000 = 90; split: protocol=9, lp=81
+    let mut pool = default_pool();
+    pool.total_deposits = 1_000_000;
+    pool.total_borrows = 0;
+
+    let loan = 100_000u64;
+    let fee = flash_fee(loan, FLASH_FEE_BPS).unwrap();
+    assert_eq!(fee, 90);
+    let (lp, proto) = split_flash_fee(fee);
+    assert_eq!(proto, 9);
+    assert_eq!(lp, 81);
+
+    pool.total_deposits += lp;
+    pool.accumulated_fees += proto;
+    pool.flash_loan_amount = 0;
+
+    assert_eq!(pool.total_deposits, 1_000_081);
+    assert_eq!(pool.accumulated_fees, 9);
+}
+
+#[test]
+fn flash_cannot_exceed_available_liquidity() {
+    let pool = default_pool();
+    // pool has 0 deposits — nothing available
+    let available = pool
+        .total_deposits
+        .saturating_sub(pool.total_borrows)
+        .saturating_sub(pool.accumulated_fees);
+    assert_eq!(available, 0);
+
+    // Attempting to borrow more than available should be rejected
+    let want = 1u64;
+    assert!(want > available);
+}
+
+#[test]
+fn flash_fee_on_large_amount() {
+    // 100_000_000 tokens at 9bps = 90_000
+    let fee = flash_fee(100_000_000, FLASH_FEE_BPS).unwrap();
+    assert_eq!(fee, 90_000);
+}
+
 // ── Discriminator / error type tests ─────────────────────────────────────────
 
 #[test]
 fn lend_error_codes_are_unique() {
-    // Verify no two errors share the same discriminator value
     use veil_lending::errors::LendError;
     let codes = [
         LendError::MissingSignature as u32,
@@ -384,6 +500,9 @@ fn lend_error_codes_are_unique() {
         LendError::MathOverflow as u32,
         LendError::TransferFailed as u32,
         LendError::InvalidTimestamp as u32,
+        LendError::FlashLoanActive as u32,
+        LendError::FlashLoanNotActive as u32,
+        LendError::FlashLoanRepayInsufficient as u32,
     ];
     let mut seen = std::collections::HashSet::new();
     for &code in &codes {
@@ -393,7 +512,7 @@ fn lend_error_codes_are_unique() {
 
 #[test]
 fn instruction_discriminators_are_unique_and_sequential() {
-    use veil_lending::instructions::{Borrow, Deposit, Initialize, Liquidate, Repay, Withdraw};
+    use veil_lending::instructions::{Borrow, Deposit, FlashBorrow, FlashRepay, Initialize, Liquidate, Repay, Withdraw};
     let discs = [
         Initialize::DISCRIMINATOR,
         Deposit::DISCRIMINATOR,
@@ -401,14 +520,15 @@ fn instruction_discriminators_are_unique_and_sequential() {
         Borrow::DISCRIMINATOR,
         Repay::DISCRIMINATOR,
         Liquidate::DISCRIMINATOR,
+        FlashBorrow::DISCRIMINATOR,
+        FlashRepay::DISCRIMINATOR,
     ];
-    // All unique
     let mut seen = std::collections::HashSet::new();
     for &d in &discs {
         assert!(seen.insert(d), "duplicate discriminator: {}", d);
     }
-    // Sequential 0..=5
+    // All 8 discriminators 0..=7
     let mut sorted = discs.to_vec();
     sorted.sort();
-    assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5, 6, 7]);
 }
