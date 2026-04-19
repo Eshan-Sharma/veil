@@ -38,10 +38,16 @@ For the transparency problem, Veil integrates [Encrypt's](https://docs.encrypt.x
 
 Observers see nothing — not the collateral amount, not the debt, not the liquidation price. The protocol's core invariants (solvency, health factor enforcement) are maintained without exposing any position data publicly. Privacy is opt-in: users who don't need it incur no additional cost.
 
+## Flash Loans
+
+Veil includes a native flash loan primitive. A borrower can take any amount up to the pool's free liquidity within a single Solana transaction. The funds are transferred out at the start and must be returned — with a 0.09 % fee — by the end of the same transaction. If the repayment instruction is missing or the amount falls short, the transaction reverts atomically and no funds leave the pool.
+
+The fee is split 90 % to liquidity providers and 10 % to the protocol. Flash loans make arbitrage, liquidation bots, and on-chain collateral swaps capital-efficient: no upfront collateral required, just atomically correct execution.
+
 ## Efficient Execution
 
 The core protocol — liquidity pool, kink-curve interest rate model, health factor engine, Pyth oracle integration, and liquidation mechanism — is built using [Pinocchio](https://github.com/febo/pinocchio), Solana's zero-dependency, zero-copy program framework. This gives Veil significantly lower compute unit consumption than equivalent Anchor-based protocols, which matters at scale when health factor checks run on every borrow and liquidation.
 
 ## Architecture Philosophy
 
-Veil is designed to work today as a functional lending protocol and extend in place as Ika and Encrypt reach mainnet. No migration required. Each integration layer — cross-chain collateral, gold collateral, FHE privacy — is independently upgradeable without disrupting the core protocol.
+Veil is designed to work today as a functional lending protocol and extend in place as Ika and Encrypt reach mainnet. No migration required. Each integration layer — cross-chain collateral, gold collateral, FHE privacy, and flash loans — is independently upgradeable without disrupting the core protocol.
