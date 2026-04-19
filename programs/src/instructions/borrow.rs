@@ -141,3 +141,53 @@ impl Borrow {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_parses_amount() {
+        let amount: u64 = 1_234_567;
+        let d = amount.to_le_bytes();
+        let ix = Borrow::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 1_234_567);
+    }
+
+    #[test]
+    fn from_data_max_amount() {
+        let d = u64::MAX.to_le_bytes();
+        let ix = Borrow::from_data(&d).unwrap();
+        assert_eq!(ix.amount, u64::MAX);
+    }
+
+    #[test]
+    fn from_data_zero_amount() {
+        let d = 0u64.to_le_bytes();
+        let ix = Borrow::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 0);
+    }
+
+    #[test]
+    fn from_data_seven_bytes_returns_err() {
+        assert!(Borrow::from_data(&[0u8; 7]).is_err());
+    }
+
+    #[test]
+    fn from_data_empty_returns_err() {
+        assert!(Borrow::from_data(&[]).is_err());
+    }
+
+    #[test]
+    fn from_data_extra_bytes_ignored() {
+        let mut d = 99u64.to_le_bytes().to_vec();
+        d.extend_from_slice(&[255; 8]); // extra bytes ignored
+        let ix = Borrow::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 99);
+    }
+
+    #[test]
+    fn discriminator_is_three() {
+        assert_eq!(Borrow::DISCRIMINATOR, 3);
+    }
+}

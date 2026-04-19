@@ -10,3 +10,6 @@ crate-type = ["cdylib", "lib"]
 pinocchio        = { version = "0.11.1", features = ["cpi"] }
 pinocchio-system = "0.6.0"
 pinocchio-token  = "0.6.0"
+
+[dev-dependencies]
+# No external test deps needed — all tests use std and the crate itself.

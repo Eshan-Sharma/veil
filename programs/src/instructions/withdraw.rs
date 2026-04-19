@@ -133,3 +133,37 @@ impl Withdraw {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_parses_shares() {
+        let d = 999_000u64.to_le_bytes();
+        let ix = Withdraw::from_data(&d).unwrap();
+        assert_eq!(ix.shares, 999_000);
+    }
+
+    #[test]
+    fn from_data_max_shares() {
+        let d = u64::MAX.to_le_bytes();
+        let ix = Withdraw::from_data(&d).unwrap();
+        assert_eq!(ix.shares, u64::MAX);
+    }
+
+    #[test]
+    fn from_data_too_short_returns_err() {
+        assert!(Withdraw::from_data(&[0u8; 7]).is_err());
+    }
+
+    #[test]
+    fn from_data_empty_returns_err() {
+        assert!(Withdraw::from_data(&[]).is_err());
+    }
+
+    #[test]
+    fn discriminator_is_two() {
+        assert_eq!(Withdraw::DISCRIMINATOR, 2);
+    }
+}
