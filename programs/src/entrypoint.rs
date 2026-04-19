@@ -7,8 +7,9 @@ use pinocchio::{
 };
 
 use crate::instructions::{
-    Borrow, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, Initialize, Liquidate,
-    PrivateBorrow, PrivateDeposit, PrivateRepay, PrivateWithdraw, Repay, Withdraw,
+    Borrow, CollectFees, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, Initialize,
+    Liquidate, PausePool, PrivateBorrow, PrivateDeposit, PrivateRepay, PrivateWithdraw,
+    Repay, ResumePool, UpdatePool, Withdraw,
 };
 
 entrypoint!(process_instruction);
@@ -32,11 +33,15 @@ pub fn process_instruction(
         Liquidate::DISCRIMINATOR   => Liquidate::from_data(rest)?.process(program_id, accounts),
         FlashBorrow::DISCRIMINATOR    => FlashBorrow::from_data(rest)?.process(program_id, accounts),
         FlashRepay::DISCRIMINATOR     => FlashRepay::from_data(rest)?.process(program_id, accounts),
-        EnablePrivacy::DISCRIMINATOR  => EnablePrivacy::from_data(rest)?.process(program_id, accounts),
-        PrivateDeposit::DISCRIMINATOR => PrivateDeposit::from_data(rest)?.process(program_id, accounts),
-        PrivateBorrow::DISCRIMINATOR  => PrivateBorrow::from_data(rest)?.process(program_id, accounts),
-        PrivateRepay::DISCRIMINATOR   => PrivateRepay::from_data(rest)?.process(program_id, accounts),
+        EnablePrivacy::DISCRIMINATOR   => EnablePrivacy::from_data(rest)?.process(program_id, accounts),
+        PrivateDeposit::DISCRIMINATOR  => PrivateDeposit::from_data(rest)?.process(program_id, accounts),
+        PrivateBorrow::DISCRIMINATOR   => PrivateBorrow::from_data(rest)?.process(program_id, accounts),
+        PrivateRepay::DISCRIMINATOR    => PrivateRepay::from_data(rest)?.process(program_id, accounts),
         PrivateWithdraw::DISCRIMINATOR => PrivateWithdraw::from_data(rest)?.process(program_id, accounts),
-        _                             => Err(ProgramError::InvalidInstructionData),
+        UpdatePool::DISCRIMINATOR      => UpdatePool::from_data(rest)?.process(program_id, accounts),
+        PausePool::DISCRIMINATOR       => PausePool::from_data(rest)?.process(program_id, accounts),
+        ResumePool::DISCRIMINATOR      => ResumePool::from_data(rest)?.process(program_id, accounts),
+        CollectFees::DISCRIMINATOR     => CollectFees::from_data(rest)?.process(program_id, accounts),
+        _                              => Err(ProgramError::InvalidInstructionData),
     }
 }
