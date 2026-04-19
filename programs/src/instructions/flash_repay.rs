@@ -1,0 +1,101 @@
+/*!
+Repay an in-flight flash loan including the fee.
+
+Must be called in the same transaction as FlashBorrow (discriminator 0x06).
+Transfers `flash_loan_amount + fee` from the borrower back to the vault.
+
+Fee distribution:
+  90 % → LPs  (total_deposits increases)
+  10 % → protocol (accumulated_fees increases)
+
+Accounts:
+  [0]  borrower        signer, writable
+  [1]  borrower_token  writable
+  [2]  vault           writable
+  [3]  pool            writable
+  [4]  token_program
+
+Instruction data (after discriminator 0x07): none
+*/
+
+use pinocchio::{
+    account::AccountView,
+    error::ProgramError,
+    Address, ProgramResult,
+};
+use pinocchio_token::instructions::Transfer;
+
+use crate::{
+    errors::LendError,
+    math,
+    state::LendingPool,
+};
+
+pub struct FlashRepay;
+
+impl FlashRepay {
+    pub const DISCRIMINATOR: u8 = 7;
+
+    pub fn from_data(_data: &[u8]) -> Result<Self, ProgramError> {
+        Ok(FlashRepay)
+    }
+
+    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+        if accounts.len() < 5 {
+            return Err(LendError::InvalidInstructionData.into());
+        }
+        if !accounts[0].is_signer() {
+            return Err(LendError::MissingSignature.into());
+        }
+
+        // ── Read loan details ─────────────────────────────────────────────
+        let (loan_amount, fee, lp_fee, protocol_fee) = {
+            let pool = LendingPool::from_account(&accounts[3])?;
+
+            if pool.flash_loan_amount == 0 {
+                return Err(LendError::FlashLoanNotActive.into());
+            }
+
+            let loan_amount = pool.flash_loan_amount;
+            let fee = math::flash_fee(loan_amount, pool.flash_fee_bps)?;
+            let (lp_fee, protocol_fee) = math::split_flash_fee(fee);
+            (loan_amount, fee, lp_fee, protocol_fee)
+        };
+
+        let repay_total = loan_amount
+            .checked_add(fee)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        // ── Transfer: borrower_token → vault ─────────────────────────────
+        Transfer::new(&accounts[1], &accounts[2], &accounts[0], repay_total).invoke()?;
+
+        // ── Update pool state ─────────────────────────────────────────────
+        {
+            let pool = LendingPool::from_account_mut(&accounts[3])?;
+            // LPs earn their share of the fee.
+            pool.total_deposits = pool.total_deposits.saturating_add(lp_fee);
+            // Protocol earns its share.
+            pool.accumulated_fees = pool.accumulated_fees.saturating_add(protocol_fee);
+            // Loan is settled.
+            pool.flash_loan_amount = 0;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_any_bytes_ok() {
+        assert!(FlashRepay::from_data(&[]).is_ok());
+        assert!(FlashRepay::from_data(&[1, 2, 3]).is_ok());
+    }
+
+    #[test]
+    fn discriminator_is_seven() {
+        assert_eq!(FlashRepay::DISCRIMINATOR, 7);
+    }
+}
