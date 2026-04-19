@@ -13,7 +13,7 @@ const qs = [
   },
   {
     q: "What does \"encrypted position\" actually mean?",
-    a: "Collateral amount, debt and health factor are stored on-chain as FHE ciphertext via Encrypt. Using the REFHE scheme, the Veil program computes solvency and health over encrypted data — so a third-party RPC observer sees ciphertext bytes, while the protocol still enforces every invariant.",
+    a: "When you call EnablePrivacy, Veil creates an EncryptedPosition account that holds two on-chain ciphertext handles — one for your deposit balance, one for your debt — managed by the Encrypt program. Every subsequent deposit, borrow, repay, or withdraw submits an FHE computation graph (add_deposit, sub_debt, etc.) to the Encrypt program via CPI. An off-chain executor evaluates the graph using actual FHE and commits updated ciphertext. An RPC observer sees 32-byte opaque handles, not values. Solvency is enforced in plaintext by the standard UserPosition; the encrypted mirror provides observer confidentiality.",
   },
   {
     q: "If positions are encrypted, how does liquidation work?",

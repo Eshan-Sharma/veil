@@ -1,5 +1,4 @@
 import Link from "next/link";
-import ConnectButton from "./ConnectButton";
 
 function Logo() {
   return (
@@ -56,7 +55,12 @@ export default function Nav() {
             >
               GitHub
             </a>
-            <ConnectButton size="sm" />
+            <Link
+              href="/dapp"
+              className="hidden rounded-full bg-violet-600 px-3.5 py-1.5 text-[13px] font-semibold text-white transition hover:bg-violet-700 sm:block"
+            >
+              Launch App
+            </Link>
           </div>
         </nav>
       </div>

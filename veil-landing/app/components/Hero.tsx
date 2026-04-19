@@ -38,7 +38,7 @@ export default function Hero() {
           <div className="mt-9 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
             <a
               id="launch"
-              href="#"
+              href="/dapp"
               className="group inline-flex h-12 items-center gap-2 rounded-full bg-zinc-950 pl-6 pr-5 text-[14.5px] font-semibold text-white shadow-[0_10px_30px_-12px_rgba(109,40,217,0.5)] transition hover:bg-zinc-800"
             >
               Launch app

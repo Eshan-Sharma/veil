@@ -44,7 +44,8 @@ export default function Security() {
                 <li className="flex items-center gap-2"><Dot /> Core protocol design frozen</li>
                 <li className="flex items-center gap-2"><Dot /> Architecture + invariants documented</li>
                 <li className="flex items-center gap-2"><Dot /> Pinocchio implementation underway</li>
-                <li className="flex items-center gap-2"><Dot /> Ika / Encrypt integrations scaffolded</li>
+                <li className="flex items-center gap-2"><Dot /> FHE layer implemented — EncryptedPosition, 5 private instructions, graph definitions</li>
+                <li className="flex items-center gap-2"><Dot /> Ika integration scaffolded; Encrypt CPI activates when SDK reaches pinocchio 0.11</li>
                 <li className="flex items-start gap-2 text-amber-700"><DotWarn /> Not audited — experimental; do not deploy mainnet capital without review.</li>
               </ul>
             </div>
