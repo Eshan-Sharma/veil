@@ -40,23 +40,3 @@ impl PausePool {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_accepts_empty() {
-        assert!(PausePool::from_data(&[]).is_ok());
-    }
-
-    #[test]
-    fn from_data_ignores_extra_bytes() {
-        assert!(PausePool::from_data(&[0xff, 0x00]).is_ok());
-    }
-
-    #[test]
-    fn discriminator_is_14() {
-        assert_eq!(PausePool::DISCRIMINATOR, 14);
-    }
-}

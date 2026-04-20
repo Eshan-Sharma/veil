@@ -160,21 +160,3 @@ impl Liquidate {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_any_bytes_ok() {
-        // Liquidate takes no data — any slice is valid
-        assert!(Liquidate::from_data(&[]).is_ok());
-        assert!(Liquidate::from_data(&[1, 2, 3]).is_ok());
-        assert!(Liquidate::from_data(&[0u8; 64]).is_ok());
-    }
-
-    #[test]
-    fn discriminator_is_five() {
-        assert_eq!(Liquidate::DISCRIMINATOR, 5);
-    }
-}

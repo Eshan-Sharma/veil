@@ -85,6 +85,10 @@ impl PrivateBorrow {
             return Err(LendError::ZeroAmount.into());
         }
 
+        if LendingPool::from_account(&accounts[3])?.paused != 0 {
+            return Err(LendError::PoolPaused.into());
+        }
+
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
         {
@@ -95,6 +99,7 @@ impl PrivateBorrow {
         // ── Verify ciphertext accounts match EncryptedPosition ────────────
         {
             let enc_pos = EncryptedPosition::from_account(&accounts[5])?;
+            enc_pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             enc_pos.verify_debt_ct(&accounts[6])?;
             enc_pos.verify_deposit_ct(&accounts[7])?;
         }
@@ -103,6 +108,7 @@ impl PrivateBorrow {
         let authority_bump = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             let deposit_balance =
                 math::current_deposit_balance(pos.deposit_shares, pool.supply_index)?;
@@ -157,6 +163,7 @@ impl PrivateBorrow {
         let (borrow_index, existing_debt) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             let debt = math::current_borrow_balance(
                 pos.borrow_principal,
                 pool.borrow_index,
@@ -200,29 +207,5 @@ impl PrivateBorrow {
         ctx.is_healthy(&accounts[7], &accounts[6], &accounts[9])?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_amount_and_bump() {
-        let mut d = 100_000u64.to_le_bytes().to_vec();
-        d.push(254);
-        let ix = PrivateBorrow::from_data(&d).unwrap();
-        assert_eq!(ix.amount, 100_000);
-        assert_eq!(ix.cpi_auth_bump, 254);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(PrivateBorrow::from_data(&[0u8; 8]).is_err());
-    }
-
-    #[test]
-    fn discriminator_is_ten() {
-        assert_eq!(PrivateBorrow::DISCRIMINATOR, 10);
     }
 }

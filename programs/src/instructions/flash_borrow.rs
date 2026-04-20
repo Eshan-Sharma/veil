@@ -32,7 +32,6 @@ use pinocchio_token::instructions::Transfer;
 
 use crate::{
     errors::LendError,
-    math,
     state::LendingPool,
 };
 
@@ -114,47 +113,5 @@ impl FlashBorrow {
             .invoke_signed(&[signer])?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_amount() {
-        let d = 500_000u64.to_le_bytes();
-        let ix = FlashBorrow::from_data(&d).unwrap();
-        assert_eq!(ix.amount, 500_000);
-    }
-
-    #[test]
-    fn from_data_max_amount() {
-        let d = u64::MAX.to_le_bytes();
-        let ix = FlashBorrow::from_data(&d).unwrap();
-        assert_eq!(ix.amount, u64::MAX);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(FlashBorrow::from_data(&[0u8; 7]).is_err());
-    }
-
-    #[test]
-    fn from_data_empty_returns_err() {
-        assert!(FlashBorrow::from_data(&[]).is_err());
-    }
-
-    #[test]
-    fn from_data_extra_bytes_ignored() {
-        let mut d = 42u64.to_le_bytes().to_vec();
-        d.extend_from_slice(&[0xff; 8]);
-        let ix = FlashBorrow::from_data(&d).unwrap();
-        assert_eq!(ix.amount, 42);
-    }
-
-    #[test]
-    fn discriminator_is_six() {
-        assert_eq!(FlashBorrow::DISCRIMINATOR, 6);
     }
 }

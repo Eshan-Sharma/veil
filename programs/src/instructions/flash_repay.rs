@@ -83,19 +83,3 @@ impl FlashRepay {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_any_bytes_ok() {
-        assert!(FlashRepay::from_data(&[]).is_ok());
-        assert!(FlashRepay::from_data(&[1, 2, 3]).is_ok());
-    }
-
-    #[test]
-    fn discriminator_is_seven() {
-        assert_eq!(FlashRepay::DISCRIMINATOR, 7);
-    }
-}

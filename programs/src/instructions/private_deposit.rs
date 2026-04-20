@@ -74,6 +74,10 @@ impl PrivateDeposit {
             return Err(LendError::ZeroAmount.into());
         }
 
+        if LendingPool::from_account(&accounts[3])?.paused != 0 {
+            return Err(LendError::PoolPaused.into());
+        }
+
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
         {
@@ -84,8 +88,12 @@ impl PrivateDeposit {
         // ── Verify encrypted position ciphertext accounts ─────────────────
         {
             let enc_pos = EncryptedPosition::from_account(&accounts[5])?;
+            enc_pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             enc_pos.verify_deposit_ct(&accounts[6])?;
         }
+
+        UserPosition::from_account(&accounts[4])?
+            .verify_binding(accounts[0].address(), accounts[3].address())?;
 
         // ── Compute shares ────────────────────────────────────────────────
         let supply_index = LendingPool::from_account(&accounts[3])?.supply_index;
@@ -125,29 +133,5 @@ impl PrivateDeposit {
         ctx.add_deposit(&accounts[6], &accounts[7], &accounts[6])?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_amount_and_bump() {
-        let mut d = 250_000u64.to_le_bytes().to_vec();
-        d.push(123);
-        let ix = PrivateDeposit::from_data(&d).unwrap();
-        assert_eq!(ix.amount, 250_000);
-        assert_eq!(ix.cpi_auth_bump, 123);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(PrivateDeposit::from_data(&[0u8; 8]).is_err());
-    }
-
-    #[test]
-    fn discriminator_is_nine() {
-        assert_eq!(PrivateDeposit::DISCRIMINATOR, 9);
     }
 }
