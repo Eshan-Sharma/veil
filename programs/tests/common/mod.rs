@@ -19,7 +19,7 @@ allocator), so data lands at byte 96 = 6×16. ✓
 */
 
 use pinocchio::{account::RuntimeAccount, Address, AccountView};
-use veil_lending::{math::WAD, state::{EncryptedPosition, IkaDwalletPosition, LendingPool}};
+use veil_lending::{math::WAD, state::{EncryptedPosition, IkaDwalletPosition, LendingPool, UserPosition}};
 
 const ACCOUNT_HEADER: usize = 88;
 const BACKING_OFFSET: usize = 8; // data at 8+88=96 (multiple of 16)
@@ -30,6 +30,16 @@ pub struct RawAccount {
 
 impl RawAccount {
     pub fn new(key: [u8; 32], is_signer: bool, is_writable: bool, data: &[u8]) -> Self {
+        Self::new_with_owner(key, [0u8; 32], is_signer, is_writable, data)
+    }
+
+    pub fn new_with_owner(
+        key: [u8; 32],
+        owner: [u8; 32],
+        is_signer: bool,
+        is_writable: bool,
+        data: &[u8],
+    ) -> Self {
         let total_bytes = BACKING_OFFSET + ACCOUNT_HEADER + data.len();
         let words = (total_bytes + 15) / 16;
         let mut backing = vec![0u128; words];
@@ -42,6 +52,7 @@ impl RawAccount {
         hdr[1] = if is_signer { 1 } else { 0 };
         hdr[2] = if is_writable { 1 } else { 0 };
         hdr[8..40].copy_from_slice(&key);
+        hdr[40..72].copy_from_slice(&owner);
         hdr[72..80].copy_from_slice(&1_000_000u64.to_le_bytes()); // lamports
         hdr[80..88].copy_from_slice(&(data.len() as u64).to_le_bytes());
         if !data.is_empty() {
@@ -139,6 +150,33 @@ pub fn enc_position_bytes(owner: [u8; 32], pool: [u8; 32], bump: u8) -> Vec<u8> 
         core::slice::from_raw_parts(
             &pos as *const EncryptedPosition as *const u8,
             EncryptedPosition::SIZE,
+        )
+        .to_vec()
+    }
+}
+
+pub fn user_position_bytes(
+    owner: [u8; 32],
+    pool: [u8; 32],
+    deposit_shares: u64,
+    borrow_principal: u64,
+    deposit_index_snapshot: u128,
+    borrow_index_snapshot: u128,
+    bump: u8,
+) -> Vec<u8> {
+    let mut pos: UserPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator = UserPosition::DISCRIMINATOR;
+    pos.owner = Address::new_from_array(owner);
+    pos.pool = Address::new_from_array(pool);
+    pos.deposit_shares = deposit_shares;
+    pos.borrow_principal = borrow_principal;
+    pos.deposit_index_snapshot = deposit_index_snapshot;
+    pos.borrow_index_snapshot = borrow_index_snapshot;
+    pos.bump = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const UserPosition as *const u8,
+            UserPosition::SIZE,
         )
         .to_vec()
     }
