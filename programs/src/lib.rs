@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), no_std)]
+
 pub mod errors;
 pub mod fhe;
 pub mod ika;

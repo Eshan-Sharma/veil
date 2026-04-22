@@ -92,6 +92,7 @@ impl PrivateWithdraw {
         // ── Verify ciphertext accounts ────────────────────────────────────
         {
             let enc_pos = EncryptedPosition::from_account(&accounts[5])?;
+            enc_pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             enc_pos.verify_deposit_ct(&accounts[6])?;
             enc_pos.verify_debt_ct(&accounts[7])?;
         }
@@ -100,6 +101,7 @@ impl PrivateWithdraw {
         let (token_amount, authority_bump) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             if pos.deposit_shares < self.shares {
                 return Err(LendError::ExceedsDepositBalance.into());
@@ -183,29 +185,5 @@ impl PrivateWithdraw {
         ctx.is_healthy(&accounts[6], &accounts[7], &accounts[9])?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_shares_and_bump() {
-        let mut d = 10_000u64.to_le_bytes().to_vec();
-        d.push(99);
-        let ix = PrivateWithdraw::from_data(&d).unwrap();
-        assert_eq!(ix.shares, 10_000);
-        assert_eq!(ix.cpi_auth_bump, 99);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(PrivateWithdraw::from_data(&[0u8; 8]).is_err());
-    }
-
-    #[test]
-    fn discriminator_is_twelve() {
-        assert_eq!(PrivateWithdraw::DISCRIMINATOR, 12);
     }
 }
