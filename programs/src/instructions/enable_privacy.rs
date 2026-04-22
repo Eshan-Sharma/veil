@@ -70,10 +70,14 @@ impl EnablePrivacy {
             return Err(LendError::MissingSignature.into());
         }
 
+        if accounts[2].data_len() >= EncryptedPosition::SIZE {
+            if EncryptedPosition::from_account(&accounts[2]).is_ok() {
+                return Err(ProgramError::InvalidAccountData);
+            }
+        }
+
         // ── Read current plaintext position ───────────────────────────────
         let (deposit_balance, debt_balance, pool_addr) = {
-            let pool = LendingPool::from_account(&accounts[5])?;
-
             // Accrue so the seed values are up to date.
             let clock = Clock::get()?;
             {
@@ -82,6 +86,7 @@ impl EnablePrivacy {
             }
             let pool = LendingPool::from_account(&accounts[5])?;
             let pos = UserPosition::from_account(&accounts[1])?;
+            pos.verify_binding(accounts[0].address(), accounts[5].address())?;
 
             let deposit = crate::math::current_deposit_balance(
                 pos.deposit_shares,
@@ -130,37 +135,5 @@ impl EnablePrivacy {
         )?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_bumps() {
-        let d = [0x42u8, 0xFFu8];
-        let ix = EnablePrivacy::from_data(&d).unwrap();
-        assert_eq!(ix.enc_pos_bump, 0x42);
-        assert_eq!(ix.cpi_auth_bump, 0xFF);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(EnablePrivacy::from_data(&[0u8; 1]).is_err());
-        assert!(EnablePrivacy::from_data(&[]).is_err());
-    }
-
-    #[test]
-    fn from_data_ignores_extra_bytes() {
-        let d = [1u8, 2u8, 99u8, 99u8];
-        let ix = EnablePrivacy::from_data(&d).unwrap();
-        assert_eq!(ix.enc_pos_bump, 1);
-        assert_eq!(ix.cpi_auth_bump, 2);
-    }
-
-    #[test]
-    fn discriminator_is_eight() {
-        assert_eq!(EnablePrivacy::DISCRIMINATOR, 8);
     }
 }

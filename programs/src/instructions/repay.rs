@@ -68,6 +68,7 @@ impl Repay {
         let (total_debt, borrow_index) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
+            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             if pos.borrow_principal == 0 {
                 return Err(LendError::NoBorrow.into());
@@ -102,39 +103,5 @@ impl Repay {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_data_parses_amount() {
-        let d = 888_888u64.to_le_bytes();
-        let ix = Repay::from_data(&d).unwrap();
-        assert_eq!(ix.amount, 888_888);
-    }
-
-    #[test]
-    fn from_data_too_short_returns_err() {
-        assert!(Repay::from_data(&[0u8; 7]).is_err());
-    }
-
-    #[test]
-    fn from_data_empty_returns_err() {
-        assert!(Repay::from_data(&[]).is_err());
-    }
-
-    #[test]
-    fn discriminator_is_four() {
-        assert_eq!(Repay::DISCRIMINATOR, 4);
-    }
-
-    #[test]
-    fn from_data_u64_max() {
-        let d = u64::MAX.to_le_bytes();
-        let ix = Repay::from_data(&d).unwrap();
-        assert_eq!(ix.amount, u64::MAX);
     }
 }

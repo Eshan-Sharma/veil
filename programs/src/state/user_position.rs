@@ -20,6 +20,8 @@ Layout (repr C, 144 bytes):
 
 use pinocchio::{account::AccountView, error::ProgramError, Address};
 
+use crate::errors::LendError;
+
 #[repr(C)]
 pub struct UserPosition {
     pub discriminator: [u8; 8],
@@ -99,6 +101,21 @@ impl UserPosition {
         pos.bump = bump;
         pos.deposit_index_snapshot = deposit_index_snapshot;
         pos.borrow_index_snapshot = borrow_index_snapshot;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn verify_binding(
+        &self,
+        owner: &Address,
+        pool: &Address,
+    ) -> Result<(), ProgramError> {
+        if &self.owner != owner {
+            return Err(LendError::Unauthorized.into());
+        }
+        if &self.pool != pool {
+            return Err(ProgramError::InvalidAccountData);
+        }
         Ok(())
     }
 }
