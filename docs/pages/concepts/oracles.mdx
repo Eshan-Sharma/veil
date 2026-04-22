@@ -1,0 +1,104 @@
+---
+title: Oracle Design
+description: How Veil reads and validates Pyth prices, and why each check exists.
+---
+
+# Oracle Design
+
+Veil reads prices from [Pyth Network](https://pyth.network) legacy push-oracle accounts without pulling in the Pyth SDK. This keeps the binary small and avoids version conflicts with Pinocchio.
+
+## Price Account Layout
+
+The program reads these fields from the raw Pyth legacy `PriceAccount` bytes:
+
+| Byte offset | Type | Field | Read by Veil |
+|---|---|---|---|
+| 0 | `u32` | `magic` | ✓ Must equal `0xa1b2c3d4` |
+| 8 | `u32` | `atype` | ✓ Must equal `3` (Price) |
+| 20 | `i32` | `expo` | ✓ Cached in pool |
+| 208 | `i64` | `agg.price` | ✓ Cached in pool |
+| 216 | `u64` | `agg.conf` | ✓ Validated and cached |
+| 224 | `u32` | `agg.status` | ✓ Must equal `1` (Trading) |
+
+Minimum required data length: **228 bytes**.
+
+## Validation Pipeline
+
+Every `UpdateOraclePrice` call passes through five sequential checks:
+
+```
+1. data.len() >= 228          → OracleInvalid if too short
+2. magic == 0xa1b2c3d4        → OracleInvalid if wrong
+3. atype == 3                 → OracleInvalid if not a price account
+4. price > 0                  → OracleInvalid if zero or negative
+5. status == 1 (Trading)      → OraclePriceStale if halted
+6. conf ≤ price / 50          → OracleConfTooWide if > 2% uncertainty
+```
+
+## Oracle Attack Protections
+
+### 1. Feed Address Anchoring
+
+The first call to `UpdateOraclePrice` on a pool records the Pyth feed address in `pool.pyth_price_feed`. All subsequent calls verify the address matches. This prevents an attacker from substituting a different (manipulated) feed.
+
+```
+First call:  pool.pyth_price_feed = accounts[1].address()
+Later calls: accounts[1].address() == pool.pyth_price_feed  ← or OraclePriceFeedMismatch
+```
+
+### 2. Confidence Interval Check
+
+Pyth publishes a confidence interval (`agg.conf`) alongside every price. A large confidence interval means the market is volatile or the aggregation is uncertain. Veil rejects prices where the confidence interval exceeds **2% of the price**:
+
+```
+reject if: conf > price / 50
+```
+
+This check directly defends against flash-loan-driven oracle manipulation. Flash loan attacks often create conditions where Pyth's aggregation uncertainty widens (the confidence interval grows) before the price itself moves. By rejecting wide-confidence prices, the protocol refuses to act on manipulated data during the attack window.
+
+### 3. Status Check
+
+Pyth sets `agg.status` to values other than `1` (Trading) when price feeds are halted, the market is closed, or there is insufficient data. The program rejects any non-Trading status, preventing stale prices from being used to inflate or deflate collateral values.
+
+### 4. Negative Price Guard
+
+The program rejects `agg.price ≤ 0`. Pyth can return negative prices for certain derivative assets; these are nonsensical for collateral valuation.
+
+### 5. No Timestamp Staleness (by design)
+
+Unlike some protocols, Veil does not check the Pyth account's `timestamp` field for staleness. Instead it relies on:
+- The on-chain Pyth push-oracle being updated by the Pyth network every ~400ms on Solana
+- The `status` field to detect when the feed is effectively halted
+- Keepers calling `UpdateOraclePrice` regularly
+
+This avoids false positives from short Pyth update gaps during high Solana network load.
+
+## Price Caching
+
+Veil caches the latest validated price in the `LendingPool` struct:
+
+```
+pool.pyth_price_feed  ← feed address (anchored)
+pool.oracle_price     ← raw aggregate price (i64)
+pool.oracle_conf      ← confidence interval (u64)
+pool.oracle_expo      ← price exponent (i32, typically negative)
+```
+
+To convert to USD:
+
+```typescript
+const priceUsd = Number(pool.oracle_price) * Math.pow(10, pool.oracle_expo);
+// e.g. oracle_price = 16842000000, oracle_expo = -8 → $168.42
+```
+
+## Keeper Responsibility
+
+`UpdateOraclePrice` is permissionless. Any keeper can call it. Protocols integrating with Veil should run a keeper that refreshes oracle prices before any borrow or liquidation check.
+
+```typescript
+// Refresh the oracle before a borrow
+const refreshIx = updateOraclePriceIx(pool, pythFeed);
+const borrowIx  = borrowIx(user, ...);
+
+const tx = new Transaction().add(refreshIx).add(borrowIx);
+```

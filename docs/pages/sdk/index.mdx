@@ -1,0 +1,62 @@
+---
+title: TypeScript SDK
+description: Installation, structure, and quick-start for the Veil TypeScript SDK.
+---
+
+# TypeScript SDK
+
+The Veil TypeScript SDK lives in `lib/` in the monorepo. Copy it into your project or import it directly if you're in a monorepo setup.
+
+## Structure
+
+```
+lib/
+├── veil/
+│   ├── constants.ts     ← PROGRAM_ID, WAD, TOKEN_PROGRAM_ID, POOL_SIZE, etc.
+│   ├── instructions.ts  ← All instruction builders (initializeIx, depositIx, …)
+│   ├── pda.ts           ← PDA derivation helpers
+│   ├── state.ts         ← On-chain account decoders (decodePool, decodePosition, …)
+│   └── index.ts         ← Re-exports
+├── ika/
+│   ├── types.ts         ← Constants, enums, layout offsets
+│   ├── pda.ts           ← findCpiAuthority, findIkaPosition, findMessageApproval
+│   ├── instructions.ts  ← ikaRegisterIx, ikaReleaseIx, ikaSignIx
+│   └── index.ts         ← Re-exports
+└── pyth/
+    ├── prices.ts        ← fetchPythPrices(), formatPrice()
+    └── index.ts         ← Re-exports
+```
+
+## Key Constants
+
+```typescript
+import { PROGRAM_ID, WAD, POOL_SIZE, POSITION_SIZE } from './lib/veil/constants';
+
+console.log(PROGRAM_ID.toBase58()); // Veil program (set via env var)
+console.log(WAD);                    // 1_000_000_000_000_000_000n
+console.log(POOL_SIZE);              // 416
+console.log(POSITION_SIZE);          // 144
+```
+
+## Live Price Fetching
+
+```typescript
+import { fetchPythPrices, formatPrice } from './lib/pyth/prices';
+
+// Returns { sol: 168.42, btc: 61200, eth: 3240, xau: 2318, usdc: 1.0 }
+const prices = await fetchPythPrices();
+
+// Format for display: "$168.42" | "$61,200" | etc.
+const solDisplay = formatPrice(prices.sol, '$168.42');  // fallback if null
+```
+
+The `usePythPrices` React hook wraps this in a 10-second polling loop:
+
+```typescript
+import { usePythPrices } from './app/dapp/hooks/usePythPrices';
+
+function MyComponent() {
+  const prices = usePythPrices();   // { sol: 168.42, ... }
+  return <div>SOL: ${prices.sol?.toFixed(2)}</div>;
+}
+```

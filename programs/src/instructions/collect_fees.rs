@@ -78,3 +78,23 @@ impl CollectFees {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_accepts_empty() {
+        assert!(CollectFees::from_data(&[]).is_ok());
+    }
+
+    #[test]
+    fn from_data_ignores_extra_bytes() {
+        assert!(CollectFees::from_data(&[0xde, 0xad]).is_ok());
+    }
+
+    #[test]
+    fn discriminator_is_16() {
+        assert_eq!(CollectFees::DISCRIMINATOR, 16);
+    }
+}

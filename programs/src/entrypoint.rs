@@ -13,7 +13,6 @@ use crate::instructions::{
 };
 
 entrypoint!(process_instruction);
-#[cfg(not(test))]
 nostd_panic_handler!();
 
 pub fn process_instruction(

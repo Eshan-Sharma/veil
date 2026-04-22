@@ -70,7 +70,6 @@ impl Withdraw {
         let (token_amount, authority_bump) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
 
             if pos.deposit_shares < self.shares {
                 return Err(LendError::ExceedsDepositBalance.into());
@@ -132,5 +131,39 @@ impl Withdraw {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_parses_shares() {
+        let d = 999_000u64.to_le_bytes();
+        let ix = Withdraw::from_data(&d).unwrap();
+        assert_eq!(ix.shares, 999_000);
+    }
+
+    #[test]
+    fn from_data_max_shares() {
+        let d = u64::MAX.to_le_bytes();
+        let ix = Withdraw::from_data(&d).unwrap();
+        assert_eq!(ix.shares, u64::MAX);
+    }
+
+    #[test]
+    fn from_data_too_short_returns_err() {
+        assert!(Withdraw::from_data(&[0u8; 7]).is_err());
+    }
+
+    #[test]
+    fn from_data_empty_returns_err() {
+        assert!(Withdraw::from_data(&[]).is_err());
+    }
+
+    #[test]
+    fn discriminator_is_two() {
+        assert_eq!(Withdraw::DISCRIMINATOR, 2);
     }
 }

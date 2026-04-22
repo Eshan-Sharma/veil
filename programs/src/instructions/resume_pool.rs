@@ -39,3 +39,23 @@ impl ResumePool {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_accepts_empty() {
+        assert!(ResumePool::from_data(&[]).is_ok());
+    }
+
+    #[test]
+    fn from_data_ignores_extra_bytes() {
+        assert!(ResumePool::from_data(&[0x00]).is_ok());
+    }
+
+    #[test]
+    fn discriminator_is_15() {
+        assert_eq!(ResumePool::DISCRIMINATOR, 15);
+    }
+}

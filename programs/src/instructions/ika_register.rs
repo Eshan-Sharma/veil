@@ -170,3 +170,37 @@ impl IkaRegister {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_data(usd_value: u64, curve: u16, scheme: u16, pos_bump: u8, cpi_bump: u8) -> Vec<u8> {
+        let mut d = usd_value.to_le_bytes().to_vec();
+        d.extend_from_slice(&curve.to_le_bytes());
+        d.extend_from_slice(&scheme.to_le_bytes());
+        d.push(pos_bump);
+        d.push(cpi_bump);
+        d
+    }
+
+    #[test]
+    fn from_data_parses() {
+        let d = make_data(500_000, 0, 1, 254, 255);
+        let ix = IkaRegister::from_data(&d).unwrap();
+        assert_eq!(ix.usd_value, 500_000);
+        assert_eq!(ix.curve, 0);
+        assert_eq!(ix.signature_scheme, 1);
+        assert_eq!(ix.position_bump, 254);
+        assert_eq!(ix.cpi_authority_bump, 255);
+    }
+
+    #[test]
+    fn from_data_too_short() {
+        assert!(IkaRegister::from_data(&[0u8; 13]).is_err());
+    }
+
+    #[test]
+    fn discriminator() {
+        assert_eq!(IkaRegister::DISCRIMINATOR, 17);
+    }
+}

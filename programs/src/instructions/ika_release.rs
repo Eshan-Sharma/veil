@@ -105,3 +105,26 @@ impl IkaRelease {
         Ok(())
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_data_parses_bump() {
+        let d = [42u8];
+        let ix = IkaRelease::from_data(&d).unwrap();
+        assert_eq!(ix.cpi_authority_bump, 42);
+    }
+
+    #[test]
+    fn from_data_empty_errors() {
+        assert!(IkaRelease::from_data(&[]).is_err());
+    }
+
+    #[test]
+    fn discriminator() {
+        assert_eq!(IkaRelease::DISCRIMINATOR, 18);
+    }
+}
