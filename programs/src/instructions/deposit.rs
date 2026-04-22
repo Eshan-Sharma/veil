@@ -121,9 +121,6 @@ impl Deposit {
                 si,
                 bi,
             )?;
-        } else {
-            let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(&user_addr, &pool_addr)?;
         }
 
         // ── Compute shares ────────────────────────────────────────────────
@@ -145,5 +142,62 @@ impl Deposit {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_data(amount: u64, bump: u8) -> Vec<u8> {
+        let mut d = amount.to_le_bytes().to_vec();
+        d.push(bump);
+        d
+    }
+
+    #[test]
+    fn from_data_parses_correctly() {
+        let d = make_data(500_000, 254);
+        let ix = Deposit::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 500_000);
+        assert_eq!(ix.position_bump, 254);
+    }
+
+    #[test]
+    fn from_data_zero_amount() {
+        let d = make_data(0, 1);
+        let ix = Deposit::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 0);
+    }
+
+    #[test]
+    fn from_data_max_amount() {
+        let d = make_data(u64::MAX, 255);
+        let ix = Deposit::from_data(&d).unwrap();
+        assert_eq!(ix.amount, u64::MAX);
+        assert_eq!(ix.position_bump, 255);
+    }
+
+    #[test]
+    fn from_data_little_endian_amount() {
+        // 0x0102_0000_0000_0000 = 513 in little-endian
+        let d = [1u8, 2, 0, 0, 0, 0, 0, 0, 7];
+        let ix = Deposit::from_data(&d).unwrap();
+        assert_eq!(ix.amount, 0x0000_0000_0000_0201);
+    }
+
+    #[test]
+    fn from_data_too_short_returns_err() {
+        assert!(Deposit::from_data(&[1, 2, 3, 4, 5, 6, 7, 8]).is_err()); // 8 bytes, need 9
+    }
+
+    #[test]
+    fn from_data_empty_returns_err() {
+        assert!(Deposit::from_data(&[]).is_err());
+    }
+
+    #[test]
+    fn discriminator_is_one() {
+        assert_eq!(Deposit::DISCRIMINATOR, 1);
     }
 }

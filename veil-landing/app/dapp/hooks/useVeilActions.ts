@@ -1,0 +1,192 @@
+"use client";
+
+import { useState, useCallback } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  depositIx,
+  withdrawIx,
+  borrowIx,
+  repayIx,
+  flashBorrowIx,
+  flashRepayIx,
+  findPoolAddress,
+  findPoolAuthorityAddress,
+  findPositionAddress,
+  findVaultAddress,
+  TOKEN_PROGRAM_ID,
+} from "@/lib/veil";
+
+/**
+ * Devnet token mints for each pool.
+ * Override via env vars after deploying and initializing pools.
+ */
+export const POOL_MINTS: Record<string, PublicKey> = {
+  sol: new PublicKey(
+    process.env.NEXT_PUBLIC_SOL_MINT ?? "So11111111111111111111111111111111111111112"
+  ),
+  btc: new PublicKey(
+    process.env.NEXT_PUBLIC_BTC_MINT ?? "11111111111111111111111111111111"
+  ),
+  eth: new PublicKey(
+    process.env.NEXT_PUBLIC_ETH_MINT ?? "11111111111111111111111111111111"
+  ),
+  xau: new PublicKey(
+    process.env.NEXT_PUBLIC_XAU_MINT ?? "11111111111111111111111111111111"
+  ),
+  usdc: new PublicKey(
+    process.env.NEXT_PUBLIC_USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  ),
+};
+
+export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
+
+export function useVeilActions() {
+  const { publicKey, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const [status, setStatus] = useState<TxStatus>("idle");
+  const [txSig, setTxSig] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  function reset() {
+    setStatus("idle");
+    setTxSig(null);
+    setErrorMsg(null);
+  }
+
+  async function sendTx(buildIx: () => TransactionInstruction) {
+    if (!publicKey) return;
+    setStatus("building");
+    setErrorMsg(null);
+    setTxSig(null);
+    try {
+      const ix = buildIx();
+      const tx = new Transaction().add(ix);
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+      setStatus("signing");
+      const sig = await sendTransaction(tx, connection);
+      setStatus("confirming");
+      await connection.confirmTransaction(sig, "confirmed");
+      setStatus("success");
+      setTxSig(sig);
+    } catch (e: unknown) {
+      setStatus("error");
+      setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
+    }
+  }
+
+  const deposit = useCallback(
+    async (poolId: string, amount: bigint) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const [authority] = findPoolAuthorityAddress(pool);
+      const vault = findVaultAddress(mint, authority);
+      const [position, positionBump] = findPositionAddress(pool, publicKey);
+      const userToken = getAssociatedTokenAddressSync(
+        mint, publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await sendTx(() =>
+        depositIx(publicKey, userToken, vault, pool, position, amount, positionBump)
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  const withdraw = useCallback(
+    async (poolId: string, shares: bigint) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const [authority] = findPoolAuthorityAddress(pool);
+      const vault = findVaultAddress(mint, authority);
+      const [position] = findPositionAddress(pool, publicKey);
+      const userToken = getAssociatedTokenAddressSync(
+        mint, publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await sendTx(() =>
+        withdrawIx(publicKey, userToken, vault, pool, position, authority, shares)
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  const borrow = useCallback(
+    async (poolId: string, amount: bigint) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const [authority] = findPoolAuthorityAddress(pool);
+      const vault = findVaultAddress(mint, authority);
+      const [position] = findPositionAddress(pool, publicKey);
+      const userToken = getAssociatedTokenAddressSync(
+        mint, publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await sendTx(() =>
+        borrowIx(publicKey, userToken, vault, pool, position, authority, amount)
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  const repay = useCallback(
+    async (poolId: string, amount: bigint) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const vault = findVaultAddress(mint, findPoolAuthorityAddress(pool)[0]);
+      const [position] = findPositionAddress(pool, publicKey);
+      const userToken = getAssociatedTokenAddressSync(
+        mint, publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await sendTx(() =>
+        repayIx(publicKey, userToken, vault, pool, position, amount)
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  const flashExecute = useCallback(
+    async (poolId: string, amount: bigint) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const [authority] = findPoolAuthorityAddress(pool);
+      const vault = findVaultAddress(mint, authority);
+      const borrowerToken = getAssociatedTokenAddressSync(
+        mint, publicKey, false, TOKEN_PROGRAM_ID
+      );
+      const tx = new Transaction();
+      tx.add(flashBorrowIx(publicKey, borrowerToken, vault, pool, authority, amount));
+      tx.add(flashRepayIx(publicKey, borrowerToken, vault, pool));
+      setStatus("building");
+      setErrorMsg(null);
+      setTxSig(null);
+      try {
+        const { blockhash } = await connection.getLatestBlockhash();
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = publicKey;
+        setStatus("signing");
+        const sig = await sendTransaction(tx, connection);
+        setStatus("confirming");
+        await connection.confirmTransaction(sig, "confirmed");
+        setStatus("success");
+        setTxSig(sig);
+      } catch (e: unknown) {
+        setStatus("error");
+        setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  return { deposit, withdraw, borrow, repay, flashExecute, status, txSig, errorMsg, reset };
+}

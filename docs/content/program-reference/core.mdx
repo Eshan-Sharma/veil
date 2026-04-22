@@ -1,0 +1,281 @@
+---
+title: Core Lending Instructions
+description: Initialize, Deposit, Withdraw, Borrow, Repay, and Liquidate.
+---
+
+import { Callout } from 'nextra/components'
+
+# Core Lending Instructions
+
+## Initialize
+
+**Discriminator:** `0x00`
+
+Creates a new `LendingPool` PDA for the given SPL token mint with default interest rate parameters. Must be called by the protocol authority before any deposits or borrows.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `payer` | signer, writable | Pays for the PDA allocation |
+| 1 | `authority` | signer | Becomes the pool authority (can call admin instructions) |
+| 2 | `pool` | writable | New `LendingPool` PDA — seeds: `["pool", token_mint]` |
+| 3 | `token_mint` | readonly | SPL token this pool lends |
+| 4 | `vault` | readonly | Pre-created SPL token account owned by `pool_authority` PDA |
+| 5 | `system_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x00` |
+| 1 | 1 | `pool_bump` | Bump for the pool PDA |
+| 2 | 1 | `authority_bump` | Bump for the pool authority PDA |
+| 3 | 1 | `vault_bump` | Bump for the vault (pass `0` if vault was created externally) |
+
+### Example
+
+```typescript
+import { initializeIx } from './lib/veil/instructions';
+import { findPoolPda, findPoolAuthorityPda } from './lib/veil/pda';
+
+const [pool, poolBump] = await findPoolPda(tokenMint);
+const [authority, authorityBump] = await findPoolAuthorityPda(pool);
+
+const ix = initializeIx(
+  payer.publicKey,
+  admin.publicKey,
+  pool,
+  tokenMint,
+  vault,
+  poolBump,
+  authorityBump,
+  0,
+);
+```
+
+---
+
+## Deposit
+
+**Discriminator:** `0x01`
+
+Deposit tokens into the pool. Mints deposit shares to the user's `UserPosition` at the current `supply_index`. The `UserPosition` PDA is created on first deposit.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `user` | signer, writable | Depositor |
+| 1 | `user_token` | writable | User's SPL token account (source) |
+| 2 | `vault` | writable | Pool vault (destination) |
+| 3 | `pool` | writable | `LendingPool` — interest is accrued before state is updated |
+| 4 | `user_position` | writable | `UserPosition` PDA — created if it doesn't exist |
+| 5 | `pool_authority` | readonly | Pool authority PDA (vault owner) |
+| 6 | `system_program` | readonly | — |
+| 7 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x01` |
+| 1 | 8 | `amount` | Tokens to deposit (u64 LE) |
+| 9 | 1 | `position_bump` | Bump for the `UserPosition` PDA |
+
+### Share Calculation
+
+```
+shares_minted = amount × WAD / supply_index
+```
+
+Because `supply_index` only grows over time, later depositors receive fewer shares per token — correctly reflecting that earlier depositors have already earned interest.
+
+### Example
+
+```typescript
+import { depositIx } from './lib/veil/instructions';
+import { findUserPositionPda } from './lib/veil/pda';
+
+const [userPosition, positionBump] = await findUserPositionPda(user, pool);
+
+const ix = depositIx(
+  user,
+  userTokenAccount,
+  vault,
+  pool,
+  userPosition,
+  poolAuthority,
+  1_000_000n,     // amount in base units
+  positionBump,
+);
+```
+
+---
+
+## Withdraw
+
+**Discriminator:** `0x02`
+
+Burn deposit shares and transfer the underlying tokens back to the user.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `user` | signer, writable | — |
+| 1 | `user_token` | writable | Destination token account |
+| 2 | `vault` | writable | Pool vault (source) |
+| 3 | `pool` | writable | — |
+| 4 | `user_position` | writable | — |
+| 5 | `pool_authority` | readonly | — |
+| 6 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x02` |
+| 1 | 8 | `shares` | Deposit shares to burn (u64 LE) |
+
+### Token Amount
+
+```
+tokens_out = shares × supply_index / WAD
+```
+
+### Errors
+
+- `ExceedsDepositBalance` — shares requested exceed `user_position.deposit_shares`
+- `InsufficientLiquidity` — pool doesn't have enough free liquidity to cover the withdrawal
+
+---
+
+## Borrow
+
+**Discriminator:** `0x03`
+
+Borrow tokens against deposited collateral. Enforces the LTV cap and ensures the health factor remains ≥ 1.0 after the borrow.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `user` | signer, writable | Borrower |
+| 1 | `user_token` | writable | Destination token account |
+| 2 | `vault` | writable | Pool vault (source) |
+| 3 | `pool` | writable | — |
+| 4 | `user_position` | writable | — |
+| 5 | `pool_authority` | readonly | — |
+| 6 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x03` |
+| 1 | 8 | `amount` | Tokens to borrow (u64 LE) |
+
+### Risk Checks (in order)
+
+1. `pool.paused == 0` — pool must be active
+2. `debt_after ≤ deposit_balance × LTV` — LTV cap
+3. `health_factor(deposit_balance, debt_after, liq_threshold) ≥ WAD` — HF ≥ 1.0
+4. `amount ≤ total_deposits - total_borrows - accumulated_fees` — available liquidity
+
+### Health Factor Formula
+
+```
+HF = (deposit_balance × liquidation_threshold) / current_debt
+```
+
+If `HF < WAD` (i.e. < 1.0), the position is liquidatable.
+
+### Errors
+
+- `PoolPaused` — pool is paused
+- `ExceedsCollateralFactor` — borrow would exceed LTV cap
+- `Undercollateralised` — resulting HF < 1.0
+- `InsufficientLiquidity` — not enough free liquidity
+
+---
+
+## Repay
+
+**Discriminator:** `0x04`
+
+Repay outstanding debt. The repay amount is capped at the current total debt (principal + accrued interest).
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `user` | signer, writable | — |
+| 1 | `user_token` | writable | Source token account |
+| 2 | `vault` | writable | Pool vault (destination) |
+| 3 | `pool` | writable | — |
+| 4 | `user_position` | writable | — |
+| 5 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x04` |
+| 1 | 8 | `amount` | Tokens to repay (u64 LE). Pass `u64::MAX` to repay all. |
+
+### Errors
+
+- `NoBorrow` — user has no outstanding debt
+- `ExceedsDebtBalance` — amount exceeds total debt (capped automatically in practice)
+
+---
+
+## Liquidate
+
+**Discriminator:** `0x05`
+
+Repay part of an underwater position and seize collateral at a discount. Requires no instruction data beyond the discriminator.
+
+<Callout type="warning">
+  Liquidation is only allowed when the target position's health factor is below 1.0. Calling this on a healthy position returns `PositionHealthy`.
+</Callout>
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `liquidator` | signer, writable | — |
+| 1 | `liquidator_token` | writable | Source token account (liquidator repays debt) |
+| 2 | `borrower_token` | writable | Borrower's collateral token account (receives seized) |
+| 3 | `vault` | writable | Pool vault |
+| 4 | `pool` | writable | — |
+| 5 | `borrower_position` | writable | Underwater `UserPosition` |
+| 6 | `pool_authority` | readonly | — |
+| 7 | `protocol_treasury` | writable | Receives the protocol fee portion of seized collateral |
+| 8 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x05` |
+
+### Liquidation Mechanics
+
+```
+repay_amount   = current_debt × close_factor          (default: 50%)
+seized         = repay_amount × (1 + liquidation_bonus) (default: +5%)
+protocol_fee   = seized × protocol_liq_fee             (default: 10% of seized)
+liquidator_gets = seized - protocol_fee
+```
+
+**Default parameters:**
+- Close factor: 50%
+- Liquidation bonus: 5%
+- Protocol liquidation fee: 10% of seized
+
+### Errors
+
+- `PositionHealthy` — HF ≥ 1.0
+- `NoBorrow` — position has no debt

@@ -1,0 +1,190 @@
+---
+title: Security
+description: Veil's security model — oracle hardening, FHE privacy, dWallet custody, and known limitations.
+---
+
+import { Callout } from 'nextra/components'
+
+# Security
+
+This page documents Veil's threat model, the mitigations in place, and the assumptions that must hold for the protocol to remain safe.
+
+---
+
+## Oracle Security
+
+Price oracle manipulation is one of the most common attack vectors in DeFi. Veil defends against it at multiple layers.
+
+### Feed Address Anchoring
+
+The first call to `UpdateOraclePrice` on a pool **locks** the Pyth feed address permanently into `pool.pyth_price_feed`. Every subsequent call verifies the feed address matches. Any attempt to substitute a different feed — even one owned by the same publisher — returns `OraclePriceFeedMismatch` (error 6026).
+
+This eliminates the *feed substitution* attack, where an attacker calls `UpdateOraclePrice` with a different Pyth feed they control or can more easily manipulate.
+
+### Confidence Interval Guard
+
+Pyth publishes a confidence interval alongside every aggregate price. When the market is volatile or the Pyth aggregation has high uncertainty, this interval widens. Veil rejects prices where:
+
+```
+conf > price / 50    (i.e., confidence > 2% of price)
+```
+
+This is the primary defence against flash-loan-driven oracle manipulation. A flash loan attack compresses on-chain prices by moving DEX pools. Pyth observes these price discrepancies across sources and — before the aggregate price itself is fully deflected — the confidence interval widens. Rejecting wide-confidence prices means the protocol will not act on manipulated data during the attack window.
+
+<Callout type="warning">
+  If Pyth confidence is persistently wide (e.g. during a genuine market crash), `UpdateOraclePrice` will fail. Keepers should monitor for this condition. The pool will operate on its last cached price until confidence narrows.
+</Callout>
+
+### Status Check
+
+Pyth sets `agg.status` to values other than `1` (Trading) when:
+- A market is closed (equities outside trading hours)
+- There is insufficient publisher data
+- The feed is intentionally halted
+
+Veil returns `OraclePriceStale` (error 6025) for any non-Trading status, preventing stale prices from being used for collateral valuation or liquidation.
+
+### Negative Price Guard
+
+Pyth can return negative `agg.price` values for certain derivative assets. Veil returns `OracleInvalid` (error 6024) for any price ≤ 0. This prevents nonsensical collateral valuations.
+
+### Minimum Data Length
+
+The program verifies the Pyth account's data is at least **228 bytes** before reading any fields. A short account cannot be a valid Pyth `PriceAccount`. This prevents out-of-bounds reads via crafted accounts.
+
+### Magic and Type Bytes
+
+Veil validates:
+- `magic == 0xa1b2c3d4` — confirms it is a Pyth account at all
+- `atype == 3` — confirms it is a `PriceAccount` (not a `MappingAccount` or `ProductAccount`)
+
+Passing a wrong Pyth account type returns `OracleInvalid`.
+
+### Summary
+
+| Attack | Mitigation |
+|---|---|
+| Feed substitution | Address anchored on first call; mismatch → error |
+| Flash-loan price manipulation | Confidence interval guard rejects > 2% uncertainty |
+| Stale price (halted feed) | `status != 1` → `OraclePriceStale` |
+| Negative / zero price | `price <= 0` → `OracleInvalid` |
+| Crafted non-Pyth account | Magic + type + length checks → `OracleInvalid` |
+| Account too short for fields | Min 228-byte length check → `OracleInvalid` |
+
+---
+
+## FHE Privacy Model
+
+The Encrypted Instructions (`EnablePrivacy`, `PrivateDeposit`, `PrivateBorrow`, `PrivateRepay`, `PrivateWithdraw`) store encrypted ciphertexts on-chain. The plaintext amounts are hidden from validators and other users.
+
+### What is hidden
+
+- Deposit amounts after `EnablePrivacy` is called
+- Borrow amounts on a private position
+- Repay amounts
+- Current position balances
+
+The `EncryptedPosition` account stores two ciphertext account public keys: `enc_deposit` and `enc_debt`. These are references to ciphertext accounts, not the ciphertexts themselves. The ciphertexts live in the FHE program's ciphertext accounts.
+
+### What is NOT hidden
+
+- That a position exists (the `EncryptedPosition` PDA is public)
+- That the user called a private instruction (transaction is public on-chain)
+- The pool the user is interacting with
+- The user's wallet address
+
+Veil's FHE privacy model is *amount privacy*, not *address privacy*.
+
+### Threat model for FHE
+
+- **Validators** cannot decrypt amounts; they process ciphertexts as opaque data
+- **Other users** cannot decrypt amounts
+- **The position owner** can decrypt via their FHE private key (held off-chain, never sent on-chain)
+- **Veil program** can perform homomorphic operations on ciphertexts without decrypting
+
+<Callout type="info">
+  The FHE private key is the user's responsibility. Losing it means losing the ability to decrypt your own position's balances. The position can still be repaid or closed using the on-chain ciphertext operations; only the readable balance view is lost.
+</Callout>
+
+### Health factor under FHE
+
+When a position is encrypted, health factor checks run homomorphically over encrypted values. The comparison result (healthy / unhealthy) is revealed to the program as a plaintext boolean, but the underlying deposit and debt amounts remain encrypted.
+
+---
+
+## Ika dWallet Custody Model
+
+When a dWallet is registered as collateral, its signing authority is transferred to Veil's CPI PDA. This means **only Veil can approve Bitcoin or Ethereum transactions** for that dWallet until it is released.
+
+### What Veil enforces
+
+- `IkaSign` verifies `ika_position.status == Active` before approving any message
+- A liquidated position (`status == Liquidated`) can never approve new signatures — the collateral is permanently locked for recovery
+- Only `ika_position.owner` can call `IkaRelease` or `IkaSign`
+
+### What Veil does NOT enforce
+
+- The content of the Bitcoin/Ethereum transaction being approved. Veil authorises *signing* — it does not parse the Bitcoin script or Ethereum calldata
+- That the signed transaction is actually broadcast. The user could approve a signature and never broadcast it
+
+### Custody risk
+
+While a dWallet is registered:
+- Veil's program logic is the exclusive gatekeeper for all signing operations
+- A bug in Veil's `IkaSign` logic could, in principle, approve signatures the user did not intend
+- Veil has no mechanism to unilaterally move funds — it can only approve signing; the user must construct and broadcast transactions
+
+### Release conditions
+
+`IkaRelease` returns dWallet authority to the user only if:
+1. The caller is the position owner
+2. The position status is `Active` (not Liquidated)
+
+A liquidated position cannot be released. The dWallet remains under Veil's control for recovery by the liquidator.
+
+---
+
+## Flash Loan Safety
+
+Flash loans in Veil are atomic within a single transaction. The repayment check happens at the end of the instruction — if the borrower fails to return `amount + fee` in the same transaction, the entire transaction reverts.
+
+### Re-entrancy
+
+Veil uses a flag-based re-entrancy guard (`pool.flash_loan_active`) that is set during `FlashBorrow` and cleared on `FlashRepay`. Any instruction that mutates pool state while `flash_loan_active == true` returns an error.
+
+### Flash loan fee
+
+The fee is configurable via `UpdatePool` (`flash_fee_bps`). The minimum enforceable fee is 0 (permissioned pools may set this to 0). The fee is paid to the pool's reserve and compounds into the supply index for depositors.
+
+---
+
+## Admin Controls
+
+### Pool pausing
+
+`PausePool` halts all user-facing instructions (Deposit, Withdraw, Borrow, Repay, Liquidate, Flash Loan). Only the pool authority (set at `Initialize`) can pause or resume.
+
+### Pool parameters
+
+`UpdatePool` can change interest rate parameters, LTV, liquidation threshold, liquidation bonus, and protocol fees. Changes take effect immediately on the next accrual.
+
+<Callout type="warning">
+  There is no timelock on `UpdatePool`. Protocol deployments should use a multisig or governance program as the pool authority to prevent unilateral parameter changes.
+</Callout>
+
+### Fee collection
+
+`CollectFees` moves accrued protocol reserves from the vault to a designated treasury address. Only the pool authority can call this.
+
+---
+
+## Known Limitations
+
+| Limitation | Description |
+|---|---|
+| No timelock on admin | `UpdatePool` and `PausePool` take effect immediately; use a multisig authority |
+| Single oracle per pool | Each pool uses one Pyth feed; there is no fallback oracle |
+| No timestamp staleness check | Relies on keeper liveness and Pyth `status` field rather than `publishTime` |
+| Flash oracle gap | Between `UpdateOraclePrice` and the instruction that uses the cached price, the on-chain price can change; keepers should atomically refresh and act |
+| FHE key custody | User is solely responsible for their FHE decryption key |
+| dWallet content blindness | Veil approves signing but does not inspect the transaction being signed |

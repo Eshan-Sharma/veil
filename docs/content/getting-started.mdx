@@ -1,0 +1,135 @@
+---
+title: Getting Started
+description: Install the Veil TypeScript SDK and make your first on-chain call.
+---
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Getting Started
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Node.js | ≥ 18 |
+| Solana CLI | ≥ 1.18 |
+| Rust + cargo | stable (for building the program) |
+| `@solana/web3.js` | ^1.98 |
+
+## Installation
+
+Install the Veil TypeScript SDK from the monorepo `lib/veil` directory, or copy it directly into your project.
+
+<Tabs items={['npm', 'yarn', 'pnpm']}>
+  <Tabs.Tab>
+    ```bash
+    npm install @solana/web3.js @solana/spl-token
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```bash
+    yarn add @solana/web3.js @solana/spl-token
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```bash
+    pnpm add @solana/web3.js @solana/spl-token
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+Then copy `lib/veil/` from the Veil monorepo into your project:
+
+```
+your-project/
+└── lib/
+    └── veil/
+        ├── constants.ts   ← program ID, seeds, WAD
+        ├── instructions.ts ← all instruction builders
+        ├── pda.ts         ← PDA derivation helpers
+        ├── state.ts       ← on-chain account decoders
+        └── index.ts       ← re-exports
+```
+
+## Environment Setup
+
+Set the program ID in your environment after deploying:
+
+```bash
+# .env.local
+NEXT_PUBLIC_VEIL_PROGRAM_ID=<deployed-program-id>
+```
+
+## Deploy the Program
+
+```bash
+# Clone the repo
+git clone https://github.com/esharma3/veil
+cd veil/programs
+
+# Build (requires Solana platform-tools)
+cargo build-sbf
+
+# Deploy to devnet
+solana program deploy \
+  target/deploy/veil_lending.so \
+  --url devnet \
+  --keypair ~/.config/solana/id.json
+```
+
+<Callout type="info">
+  The program uses Pinocchio 0.11.1 and targets the `sbpf-solana-solana` target. Make sure `cargo build-sbf` is available via the Solana CLI toolchain.
+</Callout>
+
+## Your First Transaction
+
+The following example initialises a lending pool for a given SPL token mint.
+
+```typescript
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  sendAndConfirmTransaction,
+  Transaction,
+} from '@solana/web3.js';
+import { findPoolPda, findPoolAuthorityPda, findVaultPda } from './lib/veil/pda';
+import { initializeIx } from './lib/veil/instructions';
+import { PROGRAM_ID } from './lib/veil/constants';
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+const payer = Keypair.generate(); // fund this keypair before use
+const authority = payer;
+const tokenMint = new PublicKey('<your-spl-mint>');
+
+async function initPool() {
+  const [pool, poolBump] = await findPoolPda(tokenMint);
+  const [poolAuthority, authorityBump] = await findPoolAuthorityPda(pool);
+
+  // The vault must be a pre-created SPL token account owned by poolAuthority
+  const vault = new PublicKey('<pre-created-vault>');
+
+  const ix = initializeIx(
+    payer.publicKey,
+    authority.publicKey,
+    pool,
+    tokenMint,
+    vault,
+    poolBump,
+    authorityBump,
+    0, // vaultBump — set to 0 if vault was created externally
+  );
+
+  const tx = new Transaction().add(ix);
+  const sig = await sendAndConfirmTransaction(connection, tx, [payer, authority]);
+  console.log('Pool initialised:', sig);
+}
+
+initPool();
+```
+
+## Next Steps
+
+- [Program Reference](/program-reference) — complete instruction API
+- [TypeScript SDK](/sdk) — all builders, PDAs, and state decoders
+- [Architecture](/architecture) — understand the account model

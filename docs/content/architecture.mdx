@@ -1,0 +1,140 @@
+---
+title: Architecture
+description: Account model, instruction flow, and component relationships in Veil.
+---
+
+import { Callout } from 'nextra/components'
+
+# Architecture
+
+## Account Model
+
+Veil uses three primary on-chain account types, each identified by an 8-byte discriminator in the first bytes of its data:
+
+| Account | Discriminator | Size | Purpose |
+|---|---|---|---|
+| `LendingPool` | `VEILPOOL` | 416 bytes | One per token market. Tracks indices, parameters, and oracle cache. |
+| `UserPosition` | `VEILPOS!` | 144 bytes | One per (user, pool) pair. Tracks deposit shares and borrow principal. |
+| `EncryptedPosition` | `VEILENC!` | 144 bytes | Optional. Holds ciphertext account handles when privacy is enabled. |
+| `IkaDwalletPosition` | `VEILIKA!` | 128 bytes | One per (user, pool) pair for Ika dWallet collateral. |
+
+All accounts use `#[repr(C)]` zero-copy layout — no serialisation overhead. References are cast directly from raw account data pointers.
+
+## PDA Derivation
+
+```
+LendingPool     seeds: ["pool",         token_mint]   program: Veil
+UserPosition    seeds: ["user_position", user, pool]  program: Veil
+EncryptedPos    seeds: ["enc_pos",       user, pool]  program: Veil
+IkaDwalletPos   seeds: ["ika_pos",       pool, user]  program: Veil
+PoolAuthority   seeds: ["authority",     pool]         program: Veil
+CPI Authority   seeds: ["__ika_cpi_authority"]         program: Veil
+```
+
+## LendingPool Layout (416 bytes)
+
+```
+Offset  Size  Field
+──────────────────────────────────────────────────────────────
+     0     8  discriminator ("VEILPOOL")
+     8    32  authority             ← protocol admin pubkey
+    40    32  token_mint
+    72    32  vault                 ← SPL token account (owned by PoolAuthority PDA)
+   104     8  total_deposits        ← virtual (includes accrued interest)
+   112     8  total_borrows         ← virtual
+   120     8  accumulated_fees
+   128     8  last_update_timestamp
+   136     1  authority_bump
+   137     1  pool_bump
+   138     1  vault_bump
+   139     1  paused               ← 0 = active, 1 = paused
+   140     4  _pad
+   144    16  borrow_index         ← WAD = 1e18
+   160    16  supply_index
+   176    16  base_rate            ← WAD-scaled annual rate
+   192    16  optimal_utilization  ← WAD-scaled
+   208    16  slope1
+   224    16  slope2
+   240    16  reserve_factor
+   256    16  ltv
+   272    16  liquidation_threshold
+   288    16  liquidation_bonus
+   304    16  protocol_liq_fee
+   320    16  close_factor
+   336     8  flash_loan_amount    ← 0 = no active flash loan
+   344     8  flash_fee_bps        ← default 9 (= 0.09%)
+   352    32  pyth_price_feed      ← zero = not anchored
+   384     8  oracle_price         ← raw aggregate price
+   392     8  oracle_conf          ← raw confidence interval
+   400     4  oracle_expo          ← price exponent (negative)
+   404    12  _oracle_pad
+   416        (end)
+```
+
+## Instruction Dispatch
+
+Every instruction is routed by the **first byte** of the instruction data (the discriminator). There is no Anchor anchor discriminator hash — just a raw `u8`.
+
+```
+0x00  Initialize         0x08  EnablePrivacy      0x11  IkaRegister
+0x01  Deposit            0x09  PrivateDeposit     0x12  IkaRelease
+0x02  Withdraw           0x0A  PrivateBorrow      0x13  IkaSign
+0x03  Borrow             0x0B  PrivateRepay       0x14  UpdateOraclePrice
+0x04  Repay              0x0C  PrivateWithdraw    0x0D  UpdatePool
+0x05  Liquidate          0x0D  UpdatePool         0x0E  PausePool
+0x06  FlashBorrow        0x0E  PausePool          0x0F  ResumePool
+0x07  FlashRepay         0x0F  ResumePool         0x10  CollectFees
+```
+
+## Interest Accrual
+
+Interest is accrued lazily — at the start of every state-mutating instruction — by calling `LendingPool::accrue_interest(current_timestamp)`. This advances two global indices:
+
+- **`borrow_index`** — cumulative growth of 1 unit of debt. A borrower's current debt = `principal × (borrow_index / snapshot_at_borrow_time)`.
+- **`supply_index`** — cumulative growth of 1 unit of supply. A depositor's balance = `shares × supply_index`.
+
+This is the same index-based model used by Aave v2 and Compound v3 — positions are always up to date without per-position storage.
+
+## Component Relationships
+
+```
+┌───────────────────────────────────────────────────────┐
+│                      Veil Program                      │
+│                                                        │
+│  ┌──────────────┐   ┌──────────────┐                  │
+│  │  LendingPool │   │ UserPosition │                  │
+│  │  (per token) │   │ (per user)   │                  │
+│  └──────┬───────┘   └──────┬───────┘                  │
+│         │ accrue_interest   │ deposit_shares           │
+│         │ oracle_price      │ borrow_principal         │
+│         └───────────────────┘                          │
+│                                                        │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │  Privacy Layer (optional per position)          │  │
+│  │  EncryptedPosition → Encrypt program (CPI)      │  │
+│  └─────────────────────────────────────────────────┘  │
+│                                                        │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │  Ika Layer (cross-chain collateral)             │  │
+│  │  IkaDwalletPosition → Ika program (CPI)         │  │
+│  └─────────────────────────────────────────────────┘  │
+│                                                        │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │  Oracle Layer                                   │  │
+│  │  LendingPool.oracle_* ← Pyth push account       │  │
+│  └─────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────┘
+```
+
+## External Programs
+
+| Program | ID | Role |
+|---|---|---|
+| Ika dWallet | `87W54kGYFQ1rgWqMeu4XTPHWXWmXSQCcjm8vCTfiq1oY` | Cross-chain MPC signing |
+| Encrypt | `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` | FHE ciphertext operations |
+| SPL Token | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | Token transfers |
+| System Program | `11111111111111111111111111111111` | Account creation |
+
+<Callout type="info">
+  The Encrypt program CPI is stubbed pending an SDK update from pinocchio 0.10 → 0.11. All five private instructions compile and route correctly; the graph execution call activates when the SDK ships the update.
+</Callout>

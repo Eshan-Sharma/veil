@@ -29,8 +29,6 @@ PDA seeds: [b"enc_pos", owner, pool]
 
 use pinocchio::{account::AccountView, error::ProgramError, Address};
 
-use crate::errors::LendError;
-
 #[repr(C)]
 pub struct EncryptedPosition {
     pub discriminator: [u8; 8],
@@ -127,21 +125,6 @@ impl EncryptedPosition {
     pub fn verify_debt_ct(&self, account: &AccountView) -> Result<(), ProgramError> {
         if account.address().as_array() != &self.enc_debt {
             return Err(ProgramError::InvalidArgument);
-        }
-        Ok(())
-    }
-
-    #[inline(always)]
-    pub fn verify_binding(
-        &self,
-        owner: &Address,
-        pool: &Address,
-    ) -> Result<(), ProgramError> {
-        if &self.owner != owner {
-            return Err(LendError::Unauthorized.into());
-        }
-        if &self.pool != pool {
-            return Err(ProgramError::InvalidAccountData);
         }
         Ok(())
     }

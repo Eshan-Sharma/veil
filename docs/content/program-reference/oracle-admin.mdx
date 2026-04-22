@@ -1,0 +1,206 @@
+---
+title: Oracle & Admin Instructions
+description: UpdateOraclePrice, UpdatePool, PausePool, ResumePool, CollectFees.
+---
+
+import { Callout } from 'nextra/components'
+
+# Oracle & Admin Instructions
+
+## UpdateOraclePrice
+
+**Discriminator:** `0x14` (20)
+
+Read the current aggregate price from a Pyth legacy push-oracle account and cache it in the pool. This instruction is **permissionless** — anyone can call it to refresh the price.
+
+<Callout type="warning">
+  The first call to `UpdateOraclePrice` on a pool **anchors** the Pyth feed address. Subsequent calls with a different feed address return `OraclePriceFeedMismatch`. Once anchored, the feed cannot be changed without an `UpdatePool` call from the authority.
+</Callout>
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `pool` | writable | `LendingPool` to update |
+| 1 | `pyth_price_feed` | readonly | Pyth legacy push-oracle account |
+
+### Instruction Data
+
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x14` |
+
+No additional data — price, confidence, and expo are read directly from the Pyth account.
+
+### Oracle Validation
+
+The program validates these fields from the Pyth price account before writing:
+
+| Offset in Pyth account | Field | Required value |
+|---|---|---|
+| 0 | `magic` | `0xa1b2c3d4` |
+| 8 | `atype` | `3` (Price) |
+| 20 | `expo` | Any `i32` |
+| 208 | `agg.price` | > 0 |
+| 216 | `agg.conf` | ≤ `price / 50` (max 2% of price) |
+| 224 | `agg.status` | `1` (Trading) |
+
+The confidence interval check (`conf ≤ price / 50`) is a critical oracle-manipulation defence. See [Oracle Security](/security#oracle-security) for details.
+
+### Pool Fields Updated
+
+```
+pool.pyth_price_feed  ← accounts[1].address()  (only on first call)
+pool.oracle_price     ← agg.price
+pool.oracle_conf      ← agg.conf
+pool.oracle_expo      ← expo
+```
+
+### USD Value Calculation
+
+```typescript
+// price_usd = oracle_price * 10^oracle_expo
+const priceUsd = Number(pool.oracle_price) * Math.pow(10, pool.oracle_expo);
+```
+
+### Pyth Price Feed IDs (devnet)
+
+| Asset | Feed ID |
+|---|---|
+| SOL/USD | `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
+| BTC/USD | `0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43` |
+| ETH/USD | `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` |
+| XAU/USD | `0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2` |
+
+### Example
+
+```typescript
+import { updateOraclePriceIx } from './lib/veil/instructions';
+
+const PYTH_SOL_USD = new PublicKey(
+  'H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG' // devnet SOL/USD
+);
+
+const ix = updateOraclePriceIx(pool, PYTH_SOL_USD);
+await sendAndConfirmTransaction(connection, new Transaction().add(ix), [payer]);
+```
+
+### Errors
+
+| Error | Code | Condition |
+|---|---|---|
+| `OracleInvalid` | 6024 | Bad magic, wrong account type, or negative price |
+| `OraclePriceStale` | 6025 | `agg.status != 1` (not Trading) |
+| `OraclePriceFeedMismatch` | 6026 | Feed address differs from anchored address |
+| `OracleConfTooWide` | 6027 | `agg.conf > price / 50` (> 2% uncertainty) |
+
+---
+
+## UpdatePool
+
+**Discriminator:** `0x0D` (13)
+
+Update risk and interest rate parameters for a pool. Requires the pool authority signature.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `authority` | signer | Must match `pool.authority` |
+| 1 | `pool` | writable | — |
+
+### Instruction Data
+
+| Offset | Size | Field | Type |
+|---|---|---|---|
+| 0 | 1 | discriminator | `0x0D` |
+| 1 | 16 | `base_rate` | u128 LE (WAD-scaled) |
+| 17 | 16 | `optimal_utilization` | u128 LE (WAD-scaled) |
+| 33 | 16 | `slope1` | u128 LE (WAD-scaled) |
+| 49 | 16 | `slope2` | u128 LE (WAD-scaled) |
+| 65 | 16 | `reserve_factor` | u128 LE (WAD-scaled) |
+| 81 | 16 | `ltv` | u128 LE (WAD-scaled) |
+| 97 | 16 | `liquidation_threshold` | u128 LE (WAD-scaled) |
+| 113 | 16 | `liquidation_bonus` | u128 LE (WAD-scaled) |
+| 129 | 16 | `protocol_liq_fee` | u128 LE (WAD-scaled) |
+| 145 | 16 | `close_factor` | u128 LE (WAD-scaled) |
+| 161 | 8 | `flash_fee_bps` | u64 LE |
+
+**Total:** 169 bytes
+
+### Validation
+
+- `ltv < liquidation_threshold` — LTV must be strictly below the liquidation threshold
+- `flash_fee_bps ≤ 10_000` — fee rate must be ≤ 100%
+
+---
+
+## PausePool
+
+**Discriminator:** `0x0E` (14)
+
+Pause a pool, blocking all deposits and borrows. Requires the authority. Liquidations and withdrawals remain available.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `authority` | signer | — |
+| 1 | `pool` | writable | `pool.paused` is set to `1` |
+
+### Instruction Data
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | discriminator `0x0E` |
+
+---
+
+## ResumePool
+
+**Discriminator:** `0x0F` (15)
+
+Clear the pause flag on a pool.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `authority` | signer | — |
+| 1 | `pool` | writable | `pool.paused` is set to `0` |
+
+### Instruction Data
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | discriminator `0x0F` |
+
+---
+
+## CollectFees
+
+**Discriminator:** `0x10` (16)
+
+Transfer all accumulated protocol fees from the vault to the treasury. The fee balance (`pool.accumulated_fees`) is zeroed after collection.
+
+### Accounts
+
+| # | Name | Flags | Description |
+|---|---|---|---|
+| 0 | `authority` | signer | Must match `pool.authority` |
+| 1 | `pool` | writable | — |
+| 2 | `vault` | writable | Source |
+| 3 | `treasury` | writable | Destination SPL token account |
+| 4 | `pool_authority` | readonly | PDA that signs the vault transfer |
+| 5 | `token_program` | readonly | — |
+
+### Instruction Data
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | discriminator `0x10` |
+
+### Errors
+
+- `NoFeesToCollect` — `accumulated_fees == 0`
+- `Unauthorized` — signer is not the pool authority
