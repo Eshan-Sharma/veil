@@ -1,3 +1,8 @@
 programs/target/
+docs/.next/
+docs/node_modules/
+programs/target/
+veil-landing/.next/
+veil-landing/node_modules/
 .DS_Store
 PRIVATE_ROADMAP.md

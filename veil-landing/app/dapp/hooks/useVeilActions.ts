@@ -9,6 +9,7 @@ import {
   withdrawIx,
   borrowIx,
   repayIx,
+  liquidateIx,
   flashBorrowIx,
   flashRepayIx,
   findPoolAddress,
@@ -42,6 +43,24 @@ export const POOL_MINTS: Record<string, PublicKey> = {
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
+/** Fire-and-forget POST to the tx_log API. */
+function logTx(p: { signature: string; wallet: string; action: string; pool_address?: string; amount?: bigint; status?: string; error_msg?: string }) {
+  void fetch("/api/transactions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...p, amount: p.amount?.toString() }),
+  }).catch(() => {});
+}
+
+/** Fire-and-forget pool sync after a state-changing tx. */
+function syncPool(poolAddress: string) {
+  void fetch("/api/pools/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pool_address: poolAddress }),
+  }).catch(() => {});
+}
+
 export function useVeilActions() {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
@@ -49,13 +68,12 @@ export function useVeilActions() {
   const [txSig, setTxSig] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  function reset() {
-    setStatus("idle");
-    setTxSig(null);
-    setErrorMsg(null);
-  }
+  function reset() { setStatus("idle"); setTxSig(null); setErrorMsg(null); }
 
-  async function sendTx(buildIx: () => TransactionInstruction) {
+  async function sendTx(
+    buildIx: () => TransactionInstruction,
+    meta: { action: string; poolAddress: string; amount?: bigint },
+  ) {
     if (!publicKey) return;
     setStatus("building");
     setErrorMsg(null);
@@ -72,6 +90,9 @@ export function useVeilActions() {
       await connection.confirmTransaction(sig, "confirmed");
       setStatus("success");
       setTxSig(sig);
+      logTx({ signature: sig, wallet: publicKey.toBase58(), action: meta.action,
+              pool_address: meta.poolAddress, amount: meta.amount, status: "confirmed" });
+      syncPool(meta.poolAddress);
     } catch (e: unknown) {
       setStatus("error");
       setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
@@ -86,11 +107,10 @@ export function useVeilActions() {
       const [authority] = findPoolAuthorityAddress(pool);
       const vault = findVaultAddress(mint, authority);
       const [position, positionBump] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(
-        mint, publicKey, false, TOKEN_PROGRAM_ID
-      );
-      await sendTx(() =>
-        depositIx(publicKey, userToken, vault, pool, position, amount, positionBump)
+      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => depositIx(publicKey, userToken, vault, pool, position, amount, positionBump),
+        { action: "deposit", poolAddress: pool.toBase58(), amount },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,11 +125,10 @@ export function useVeilActions() {
       const [authority] = findPoolAuthorityAddress(pool);
       const vault = findVaultAddress(mint, authority);
       const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(
-        mint, publicKey, false, TOKEN_PROGRAM_ID
-      );
-      await sendTx(() =>
-        withdrawIx(publicKey, userToken, vault, pool, position, authority, shares)
+      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => withdrawIx(publicKey, userToken, vault, pool, position, authority, shares),
+        { action: "withdraw", poolAddress: pool.toBase58(), amount: shares },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,11 +143,10 @@ export function useVeilActions() {
       const [authority] = findPoolAuthorityAddress(pool);
       const vault = findVaultAddress(mint, authority);
       const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(
-        mint, publicKey, false, TOKEN_PROGRAM_ID
-      );
-      await sendTx(() =>
-        borrowIx(publicKey, userToken, vault, pool, position, authority, amount)
+      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => borrowIx(publicKey, userToken, vault, pool, position, authority, amount),
+        { action: "borrow", poolAddress: pool.toBase58(), amount },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,11 +160,28 @@ export function useVeilActions() {
       const [pool] = findPoolAddress(mint);
       const vault = findVaultAddress(mint, findPoolAuthorityAddress(pool)[0]);
       const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(
-        mint, publicKey, false, TOKEN_PROGRAM_ID
+      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => repayIx(publicKey, userToken, vault, pool, position, amount),
+        { action: "repay", poolAddress: pool.toBase58(), amount },
       );
-      await sendTx(() =>
-        repayIx(publicKey, userToken, vault, pool, position, amount)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, sendTransaction]
+  );
+
+  const liquidate = useCallback(
+    async (poolId: string, borrower: PublicKey) => {
+      if (!publicKey) return;
+      const mint = POOL_MINTS[poolId];
+      const [pool] = findPoolAddress(mint);
+      const [authority] = findPoolAuthorityAddress(pool);
+      const vault = findVaultAddress(mint, authority);
+      const [borrowerPos] = findPositionAddress(pool, borrower);
+      const liquidatorToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => liquidateIx(publicKey, liquidatorToken, vault, pool, borrowerPos, authority),
+        { action: "liquidate", poolAddress: pool.toBase58() },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,15 +195,11 @@ export function useVeilActions() {
       const [pool] = findPoolAddress(mint);
       const [authority] = findPoolAuthorityAddress(pool);
       const vault = findVaultAddress(mint, authority);
-      const borrowerToken = getAssociatedTokenAddressSync(
-        mint, publicKey, false, TOKEN_PROGRAM_ID
-      );
+      const borrowerToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
       const tx = new Transaction();
       tx.add(flashBorrowIx(publicKey, borrowerToken, vault, pool, authority, amount));
       tx.add(flashRepayIx(publicKey, borrowerToken, vault, pool));
-      setStatus("building");
-      setErrorMsg(null);
-      setTxSig(null);
+      setStatus("building"); setErrorMsg(null); setTxSig(null);
       try {
         const { blockhash } = await connection.getLatestBlockhash();
         tx.recentBlockhash = blockhash;
@@ -179,6 +210,9 @@ export function useVeilActions() {
         await connection.confirmTransaction(sig, "confirmed");
         setStatus("success");
         setTxSig(sig);
+        logTx({ signature: sig, wallet: publicKey.toBase58(), action: "flash",
+                pool_address: pool.toBase58(), amount, status: "confirmed" });
+        syncPool(pool.toBase58());
       } catch (e: unknown) {
         setStatus("error");
         setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
@@ -188,5 +222,5 @@ export function useVeilActions() {
     [publicKey, connection, sendTransaction]
   );
 
-  return { deposit, withdraw, borrow, repay, flashExecute, status, txSig, errorMsg, reset };
+  return { deposit, withdraw, borrow, repay, liquidate, flashExecute, status, txSig, errorMsg, reset };
 }

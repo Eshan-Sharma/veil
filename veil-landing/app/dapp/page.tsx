@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, CSSProperties } from "react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { WalletButton as WalletMultiButton } from "../components/WalletButton";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { useVeilActions } from "./hooks/useVeilActions";
@@ -249,9 +249,13 @@ function AppNav({ view, setView, fhe, setFhe }: {
             <span className="pulse-dot" style={{ width: 6, height: 6 }} />
             Devnet
           </div>
-          <Link href="/dapp/admin" style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 999, border: "1px solid #e7e7ec", background: "white", fontSize: 12, color: "#5b5b66", fontWeight: 500, textDecoration: "none", transition: "all .15s" }}
-            title="Admin panel">
-            <svg viewBox="0 0 16 16" width="11" height="11" fill="#9ca3af"><path d="M8 1a5 5 0 100 10A5 5 0 008 1zm0 8a3 3 0 110-6 3 3 0 010 6zm4.5 1.5h-9a.5.5 0 00-.5.5v.5a.5.5 0 00.5.5h9a.5.5 0 00.5-.5V11a.5.5 0 00-.5-.5z"/></svg>
+          <Link href="/dapp/markets"   style={navPillStyle} title="Live markets driven by /api/pools">Markets</Link>
+          <Link href="/dapp/positions" style={navPillStyle} title="Your positions">Positions</Link>
+          <Link href="/dapp/history"   style={navPillStyle} title="Tx history">History</Link>
+          <Link href="/dapp/liquidate" style={navPillStyle} title="Liquidator">Liquidate</Link>
+          <Link href="/dapp/faucet"    style={navPillStyle} title="Devnet airdrop">Faucet</Link>
+          <Link href="/dapp/admin" style={{ ...navPillStyle, fontWeight: 600 }} title="Admin panel">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="#9ca3af" style={{ marginRight: 4 }}><path d="M8 1a5 5 0 100 10A5 5 0 008 1zm0 8a3 3 0 110-6 3 3 0 010 6zm4.5 1.5h-9a.5.5 0 00-.5.5v.5a.5.5 0 00.5.5h9a.5.5 0 00.5-.5V11a.5.5 0 00-.5-.5z"/></svg>
             Admin
           </Link>
           <WalletMultiButton style={{
@@ -270,6 +274,13 @@ function AppNav({ view, setView, fhe, setFhe }: {
     </header>
   );
 }
+
+const navPillStyle: CSSProperties = {
+  display: "flex", alignItems: "center", gap: 4, padding: "4px 10px",
+  borderRadius: 999, border: "1px solid #e7e7ec", background: "white",
+  fontSize: 12, color: "#5b5b66", fontWeight: 500,
+  textDecoration: "none", transition: "all .15s",
+};
 
 // ─── Metric Card ──────────────────────────────────────────────────────────────
 
