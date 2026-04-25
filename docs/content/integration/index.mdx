@@ -1,0 +1,77 @@
+---
+title: Integration Overview
+description: How the Veil dApp, HTTP API, and Postgres index fit together.
+---
+
+import { Cards } from 'nextra/components'
+
+# Integration Overview
+
+The Veil program lives on Solana. Around it sits a small set of off-chain
+services that index pool state, log transactions, and curate which wallets
+can administer pools.
+
+## What's on chain
+
+- **Veil program** (Pinocchio). All economic logic — accrual, HF checks,
+  liquidations, flash loans, oracle validation. Authoritative for solvency.
+- **Pyth push-oracle accounts**. Anchored per-pool on first
+  `UpdateOraclePrice`.
+- **Ika dWallet program** (CPI target for cross-chain collateral).
+- **Encrypt program** (CPI target for FHE ciphertext operations).
+
+## What's off chain
+
+- **Next.js dApp** (`veil-landing/`). User-facing markets UI, admin panel,
+  liquidator UI, marketing site, this docs site.
+- **HTTP API** (`veil-landing/app/api/`). Eleven endpoints. Some
+  unauthenticated (read-only state, tx logging); some authenticated by
+  signed nonce + Postgres allowlist.
+- **Neon Postgres**. Six tables: `pool_admins`, `pools`, `positions`,
+  `tx_log`, `audit_log`, `auth_nonces`.
+
+## How they fit together
+
+```
+   Wallet                 Browser                 Server                 Solana          Postgres (Neon)
+  ──────                ─────────              ──────────             ────────────       ───────────────
+     │                     │                       │                        │                   │
+     │  signMessage()      │                       │                        │                   │
+     │ ──────────────────► │  POST /api/auth/nonce │                        │                   │
+     │                     │ ────────────────────► │  INSERT auth_nonces    │                   │
+     │                     │ ◄──────────────────── │ ◄────────────────────────────────────────  │
+     │                     │   {nonce, message}    │                        │                   │
+     │                     │                       │                        │                   │
+     │ ◄──────────────────┤                                                                    │
+     │   sig ← signMessage(message)                                                             │
+     │                     │                       │                        │                   │
+     │                     │  POST /api/admin/...  │                        │                   │
+     │                     │  {actor, nonce, sig}  │                        │                   │
+     │                     │ ────────────────────► │  verify sig            │                   │
+     │                     │                       │  DELETE nonce (atomic) │                   │
+     │                     │                       │  SELECT role           │                   │
+     │                     │                       │  ─────────────────────────────────────────►│
+     │                     │                       │                        │                   │
+     │                     │                       │  build tx              │                   │
+     │                     │ ◄──────────────────── │                        │                   │
+     │                     │       200 ok          │                        │                   │
+     │  signTransaction()  │                       │                        │                   │
+     │ ──────────────────► │  sendRawTransaction   │                        │                   │
+     │                     │ ──────────────────────────────────────────────►│                   │
+     │                     │                                                                    │
+     │                     │  POST /api/transactions ◄──── confirmTx ──────                     │
+     │                     │ ──────────────────────────────────────────────────────────────────►│
+     │                     │  POST /api/pools/sync                                              │
+     │                     │ ────────────────────► getAccountInfo ────────►                     │
+     │                     │                       decode + UPSERT pools ─────────────────────► │
+```
+
+## Sections
+
+<Cards>
+  <Cards.Card title="HTTP API" href="/integration/api" arrow />
+  <Cards.Card title="Database Schema" href="/integration/database" arrow />
+  <Cards.Card title="Authorization Model" href="/integration/authorization" arrow />
+  <Cards.Card title="dApp Flows" href="/integration/dapp" arrow />
+  <Cards.Card title="Deployment Guide" href="/integration/deployment" arrow />
+</Cards>

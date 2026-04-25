@@ -1,0 +1,220 @@
+---
+title: Deployment Guide
+description: Build the Veil program, deploy it to devnet, configure the dApp, and stand up the database. Reproducible from a clean checkout.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Deployment Guide
+
+This walks through bringing the full Veil stack online from a clean clone:
+program, database, dApp, optional docs site.
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Node.js | ≥ 18 (Next.js 16 requires modern Node) |
+| Rust + cargo | stable; Solana CLI ships its own toolchain for SBF |
+| Solana CLI | ≥ 1.18 — provides `cargo build-sbf` |
+| Postgres | A Neon project (or any Postgres ≥ 14 reachable over TLS) |
+| Wallet | A funded Solana keypair for deploys |
+
+## 1. Build & deploy the program
+
+<Steps>
+### Build
+
+```bash
+cd programs
+cargo build-sbf
+```
+
+This produces `programs/target/deploy/veil_lending.so`.
+
+### Deploy
+
+```bash
+solana program deploy \
+  programs/target/deploy/veil_lending.so \
+  --url devnet \
+  --keypair ~/.config/solana/id.json
+```
+
+Solana CLI prints the deployed program ID. Save it.
+
+### Verify
+
+```bash
+solana program show <program-id> --url devnet
+```
+
+Should report a non-zero data size and your keypair as the upgrade
+authority. The program is now callable; no further on-chain bootstrap is
+needed beyond per-pool `Initialize` calls.
+</Steps>
+
+## 2. Run protocol tests
+
+```bash
+cd programs
+cargo test --lib       # 105 unit tests across math, state, accrual
+cargo test --tests     # 57 + 99 + 81 across instruction parsing, scenarios, regressions
+```
+
+All tests must pass. They cover every formula, every PDA derivation, and
+every state transition. A failing test is a deploy blocker.
+
+## 3. Set up the database
+
+<Steps>
+### Provision Neon (or any Postgres)
+
+Create a project at [neon.tech](https://neon.tech). Copy the pooled
+connection string — it must include `?sslmode=require`.
+
+### Configure environment
+
+Create `veil-landing/.env.local` (gitignored). Required keys:
+
+```bash
+DATABASE_URL=postgresql://USER:PASS@HOST/DB?sslmode=require&channel_binding=require
+SUPER_ADMIN_PUBKEY=<base58 wallet that bootstraps the allowlist>
+
+NEXT_PUBLIC_VEIL_PROGRAM_ID=<from step 1>
+NEXT_PUBLIC_SOLANA_CLUSTER=devnet
+NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
+
+# Optional per-asset mints (overrides defaults in lib/veil constants)
+NEXT_PUBLIC_SOL_MINT=So11111111111111111111111111111111111111112
+NEXT_PUBLIC_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+# ...etc
+```
+
+<Callout type="warning">
+  `DATABASE_URL` is server-only. Do **not** prefix it with `NEXT_PUBLIC_` —
+  doing so leaks the secret into the client bundle.
+</Callout>
+
+### Run the migration
+
+```bash
+cd veil-landing
+npm install
+npm run db:migrate
+```
+
+The migration:
+1. Reads `lib/db/schema.sql` and applies all `CREATE TABLE … IF NOT EXISTS`.
+2. Inserts/updates the bootstrap super-admin from `SUPER_ADMIN_PUBKEY`.
+
+Re-running is safe — every table uses `IF NOT EXISTS`, the seed uses
+`ON CONFLICT DO UPDATE SET role='super_admin', revoked_at=NULL`.
+
+### Add additional admins (optional)
+
+```bash
+npm run db:add-admin -- <pubkey> [pool_admin|super_admin] [label]
+```
+
+Direct DB insert — bypasses the signed-nonce flow. Use it for bootstrapping
+or recovery; for routine adds prefer the UI.
+</Steps>
+
+## 4. Run the dApp
+
+<Steps>
+### Development
+
+```bash
+cd veil-landing
+npm run dev          # next dev on :3000 by default
+PORT=4321 npm run dev   # if 3000 is taken
+```
+
+Open `http://localhost:<port>`. The first request takes a few seconds while
+Next compiles the route lazily.
+
+### Production build
+
+```bash
+npm run build
+npm run start        # next start on :3000
+```
+
+`next build` runs both Webpack/Turbopack compilation and the TS type-check.
+A clean build means every route compiles, every type lines up, and every
+MDX in this docs site parses.
+
+The expected build summary lists 14 routes — three pages (`/`, `/dapp`,
+`/dapp/admin`, `/dapp/liquidate`, `/workflow`), seven API routes, and the
+not-found page.
+</Steps>
+
+## 5. Initialize a pool
+
+Once the dApp is running and the deploying wallet has been added to
+`pool_admins` (the bootstrap wallet is automatically added by the
+migration):
+
+1. Open `/dapp/admin`. The Authorized banner should show.
+2. Click the **Initialize Pool** tab.
+3. Paste the SPL token mint. Optional symbol for display.
+4. Submit. Sign two transactions:
+   - The dApp builds a single tx with two ix: `createAssociatedTokenAccount`
+     for the vault, then `Initialize`.
+   - After confirmation, sign a nonce so the server can register the pool.
+
+The pool is now in `pools` and visible in the **Manage Pools** tab.
+
+## 6. Run the docs site (optional)
+
+```bash
+cd docs
+npm install
+npm run dev          # nextra dev on :3001
+npm run build        # production build
+```
+
+The docs site reads MDX from `docs/content/` and is built with Nextra 4.6.
+This page lives at `docs/content/integration/deployment.mdx`.
+
+## Production hardening checklist
+
+Before pointing real users at a Veil deployment:
+
+- [ ] Replace single-keypair `pool.authority` with a Squads multisig vault PDA.
+- [ ] Front the multisig with a governance program that imposes a timelock on
+      `UpdatePool`.
+- [ ] Rotate `DATABASE_URL` on team membership changes; treat the connection
+      string as a high-trust secret.
+- [ ] Configure a Pyth price feed for each pool and call `UpdateOraclePrice`
+      at least once to anchor it. After anchoring, the pool will reject any
+      attempt to swap to a different feed.
+- [ ] Run a keeper that calls `UpdateOraclePrice` regularly (e.g. every minute
+      during volatility) and atomically with any sensitive instruction.
+- [ ] Write an indexer that populates `positions` from on-chain
+      `UserPosition` accounts so the liquidator UI can scan unhealthy
+      positions efficiently.
+- [ ] Audit. The protocol is pre-audit in v0.1.
+
+## Troubleshooting
+
+**`bigint: Failed to load bindings, pure JS will be used`** — benign warning
+from `bigint-buffer` (transitive dep of `@solana/spl-token`). Falls back to
+pure JS. Ignore.
+
+**Hydration mismatch on `WalletMultiButton`** — confirm pages import
+`WalletButton` from `app/components/WalletButton.tsx` rather than the raw
+adapter export. The wrapper renders a placeholder during SSR + first paint.
+
+**`relation "pool_admins" does not exist`** — your `npm run db:migrate` ran
+against an empty database but the schema didn't apply. The Neon HTTP
+serverless driver doesn't support multi-statement DDL; the migration uses
+the WebSocket `Pool` driver via `ws`. Confirm `ws` is installed
+(`npm install --save-dev ws @types/ws`) and `neonConfig.webSocketConstructor
+= ws` is set in `lib/db/migrate.ts`.
+
+**`The fetchConnectionCache option is deprecated`** — harmless deprecation
+notice from a newer Neon serverless version. Already removed from
+`lib/db/index.ts`; if you re-add it, delete it again.

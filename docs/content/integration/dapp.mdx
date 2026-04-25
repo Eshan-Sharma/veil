@@ -1,0 +1,277 @@
+---
+title: dApp Flows
+description: Every user-facing flow in the Veil dApp, from wallet connect to liquidation, mapped onto on-chain instructions and HTTP endpoints.
+---
+
+import { Callout } from 'nextra/components'
+
+# dApp Flows
+
+The Veil dApp lives in `veil-landing/`. It is a Next.js 16 App Router
+project. The pages most users will see:
+
+| Path | Audience |
+|---|---|
+| `/` | Marketing landing |
+| `/dapp` | Markets — deposit, withdraw, borrow, repay, flash |
+| `/dapp/liquidate` | Liquidator UI |
+| `/dapp/admin` | Allowlisted admin panel (Manage / Initialize / Allowlist) |
+| `/workflow` | One-page actor & instruction overview |
+
+The wallet provider is in `app/providers/SolanaProvider.tsx`: Phantom +
+Solflare, devnet, autoConnect on. All `WalletMultiButton` usages go through
+`app/components/WalletButton.tsx`, a hydration-safe wrapper that renders a
+sized placeholder during SSR + first client paint to avoid the autoConnect
+mismatch.
+
+## Action surface (`useVeilActions`)
+
+`app/dapp/hooks/useVeilActions.ts` exposes the user-facing actions:
+
+```ts
+const {
+  deposit,        // (poolId, amount: bigint) => Promise<void>
+  withdraw,       // (poolId, shares: bigint) => Promise<void>
+  borrow,         // (poolId, amount: bigint) => Promise<void>
+  repay,          // (poolId, amount: bigint) => Promise<void>
+  liquidate,      // (poolId, borrower: PublicKey) => Promise<void>
+  flashExecute,   // (poolId, amount: bigint) => Promise<void>
+  status,         // 'idle' | 'building' | 'signing' | 'confirming' | 'success' | 'error'
+  txSig,
+  errorMsg,
+  reset,
+} = useVeilActions();
+```
+
+Each action:
+
+1. Resolves PDAs (`findPoolAddress`, `findPoolAuthorityAddress`,
+   `findPositionAddress`, `findVaultAddress`).
+2. Builds the instruction with the corresponding `*Ix` builder from
+   `lib/veil/instructions.ts`.
+3. Sends, awaits `confirmTransaction(sig, "confirmed")`.
+4. Fires `POST /api/transactions` with the signature.
+5. Fires `POST /api/pools/sync` to refresh the cached pool row.
+
+Both side-effects are `void fetch(...)` — failures don't roll back the on-chain tx.
+
+## Flow: deposit collateral
+
+```
+User → Connect wallet → /dapp
+  Click "Supply" on a pool
+  Enter amount
+  ↓
+useVeilActions.deposit(poolId, amount)
+  ↓
+findPoolAddress, findPoolAuthorityAddress, findVaultAddress, findPositionAddress
+  ↓
+depositIx(user, userToken, vault, pool, position, amount, positionBump)
+  ↓
+sendTransaction → Phantom/Solflare → confirmTransaction
+  ↓
+POST /api/transactions {signature, action:"deposit", ...}
+POST /api/pools/sync   {pool_address}
+```
+
+The pool's `total_deposits`, `supply_index`, and the user's position
+`deposit_shares` all change. The cached `pools` row is re-fetched from
+chain and upserted.
+
+## Flow: borrow
+
+Identical to deposit, plus three on-chain pre-checks:
+
+- `pool.paused == 0`
+- `current_debt + amount ≤ deposit_balance × ltv` → `ExceedsCollateralFactor`
+- HF after the borrow ≥ 1.0 → `Undercollateralised` if not
+
+`Borrow` requires the **pool authority PDA** to sign the vault → user
+transfer (since the vault is owned by `[b"authority", pool]`). The PDA
+signature is constructed in `programs/src/instructions/borrow.rs:114` using
+seeds `[b"authority", pool, &[bump]]`.
+
+## Flow: repay
+
+`repay(poolId, amount)`. Pass `2n ** 64n - 1n` as `amount` to repay all
+outstanding debt — the program clamps to `current_debt`.
+
+Repaid interest is *not* burned: `total_borrows` decreases by
+`repay_amount`, and `total_deposits` is **not** modified. The interest that
+accrued on the borrow is already reflected in the supply index growth at
+`accrue_interest` time. Source: `programs/src/instructions/repay.rs`.
+
+## Flow: withdraw
+
+`withdraw(poolId, shares)`. Burns shares, transfers tokens from vault.
+
+The HF check is *post-withdraw*: if the user has any debt, the projected HF
+after the withdraw must remain ≥ 1.0. Otherwise `Undercollateralised` (6009).
+
+## Flow: liquidate
+
+`/dapp/liquidate`. Liquidator enters a borrower pubkey + market.
+
+```
+liquidate(poolId, borrower)
+  ↓
+liquidateIx(liquidator, liquidatorToken, vault, pool, borrowerPosition, poolAuthority)
+  ↓
+On chain:
+  borrower HF computed against current pool indices
+  if HF >= WAD → PositionHealthy (6010), revert
+  repay = current_debt × close_factor
+  seized = repay × (1 + liq_bonus)
+  protocol_fee = seized × protocol_liq_fee
+  liquidator_gets = seized − protocol_fee
+  Transfer in:  liquidator → vault (repay)
+  Transfer out: vault → liquidator (liquidator_gets, signed by pool authority)
+  Mutate: borrower.borrow_principal -= repay
+          borrower.deposit_shares   -= shares_for(seized)
+          pool.total_borrows        -= repay
+          pool.total_deposits       -= liquidator_gets
+          pool.accumulated_fees     += protocol_fee
+```
+
+Liquidations are permissionless. There is no allowlist or registration —
+any wallet with sufficient `liquidatorToken` balance can call this.
+
+## Flow: flash loan
+
+`flashExecute(poolId, amount)` builds a *single* transaction with two
+instructions:
+
+```
+ix[0]: FlashBorrow(borrower, borrowerToken, vault, pool, poolAuthority, amount)
+ix[1]: FlashRepay(borrower, borrowerToken, vault, pool)
+```
+
+The dApp's default `flashExecute` is a no-op payload — borrow `amount`,
+immediately repay `amount + fee`. Real users insert their own ix between
+the two; the protocol does not care what happens in between as long as the
+final repay covers principal + fee. Missing or under-paid repay → atomic
+revert of the entire transaction.
+
+The fee is `amount × pool.flash_fee_bps / 10_000`. Fee split:
+90 % to LPs (added to `total_deposits`), 10 % to `accumulated_fees`.
+Source: `programs/src/math.rs:223-238`.
+
+## Flow: enable privacy
+
+(Available once the Encrypt SDK ships with pinocchio 0.11 support.)
+
+`EnablePrivacy` (`0x08`) creates an `EncryptedPosition` PDA and two
+ciphertext accounts on the Encrypt program, seeded with the user's current
+plaintext deposit and debt. Subsequent `Private*` instructions update the
+plaintext `UserPosition` *and* CPI-update the ciphertexts. Health checks
+run homomorphically; the result is revealed as a plaintext boolean.
+
+## Flow: admin — initialize a new pool
+
+```
+Admin → /dapp/admin → Initialize Pool tab
+  Enter token mint, optional symbol
+  ↓
+buildInitializePoolTx(payer, authority, tokenMint)
+  Tx contains:
+    1. createAssociatedTokenAccountInstruction(payer, vault, poolAuthority, tokenMint)
+    2. initializePoolIx(payer, authority, pool, tokenMint, vault, bumps)
+  ↓
+sendTransaction → Phantom → confirmTransaction
+  ↓
+requestSignedAuth(wallet, "init_pool:<mint>")
+  → POST /api/auth/nonce → message
+  → wallet.signMessage(message)
+  → return {actor, nonce, signature}
+  ↓
+POST /api/pools/init {actor, nonce, signature, pool_address, token_mint, ...}
+  Server: verify signature, consume nonce, check allowlist, INSERT pools row
+  ↓
+POST /api/transactions {signature, action:"init", ...}
+```
+
+Two sources of authority interact here:
+
+- The wallet that calls `Initialize` becomes `pool.authority` permanently.
+- The wallet must additionally be in the off-chain allowlist for the dApp
+  to register the pool in `pools`. Without that registration, the pool
+  exists on chain but doesn't appear in the canonical UI.
+
+## Flow: admin — update parameters
+
+```
+/dapp/admin → Manage Pools → pick pool → Update Parameters
+  Edit any of: LTV, LiqThreshold, LiqBonus, ProtocolLiqFee, ReserveFactor,
+              CloseFactor, BaseRate, OptimalUtil, Slope1, Slope2, FlashFeeBps
+  ↓
+Validation (UI-side):
+  LTV < LiqThreshold < 100%
+  ReserveFactor < 100%
+  FlashFeeBps ≤ 10_000
+  ↓
+percentToWad on each parameter (e.g. "75.5%" → 755000000000000000n)
+  ↓
+updatePoolIx(authority, pool, params) — 168-byte ix data
+  ↓
+sendTransaction
+  ↓
+POST /api/transactions {action:"update_pool"}
+POST /api/pools/sync
+```
+
+The on-chain code re-validates the constraints before writing. Source:
+`programs/src/instructions/update_pool.rs`.
+
+## Flow: admin — pause/resume
+
+`PausePool` blocks `Deposit`, `Borrow`, `FlashBorrow`. `Withdraw`, `Repay`,
+and `Liquidate` remain functional so users and liquidators can always
+exit. The action logs as `action:"pause"` / `action:"resume"` in `tx_log`.
+
+## Flow: admin — collect fees
+
+```
+Manage Pools → Collect Fees
+  Enter treasury token account address (must be ATA of the pool's mint
+                                        owned by your wallet or multisig)
+  ↓
+collectFeesIx(authority, pool, vault, treasury, poolAuthority)
+  On chain:
+    fees = pool.accumulated_fees
+    if fees == 0 → NoFeesToCollect (6023), revert
+    Transfer: vault → treasury, signed by [b"authority", pool, &[bump]]
+    pool.accumulated_fees = 0
+```
+
+## Flow: super-admin — manage allowlist
+
+The Allowlist tab is rendered only when `useAdminRole()` returns
+`super_admin`.
+
+```
+Add admin:
+  Enter pubkey + label + role
+  ↓
+  requestSignedAuth(wallet, `add_admin:${pubkey}:${role}`)
+  ↓
+  POST /api/admin/allowlist {actor, nonce, signature, pubkey, role, label}
+
+Revoke admin:
+  Click "revoke" on a row (cannot be your own row)
+  ↓
+  requestSignedAuth(wallet, `revoke_admin:${pubkey}`)
+  ↓
+  DELETE /api/admin/allowlist {actor, nonce, signature, pubkey}
+```
+
+## Hydration safety
+
+The Solana wallet adapter reads from `localStorage` on mount (autoConnect),
+which produces a different rendered tree on the first client paint than the
+server's "no wallet" SSR snapshot. The dApp uses
+`app/components/WalletButton.tsx` to gate `WalletMultiButton` behind a
+`mounted` flag so the second render is post-hydration and React doesn't
+compare it against the SSR output.
+
+If you add a new page that displays wallet state, use `WalletButton`
+(re-exported as `WalletMultiButton`) rather than the raw adapter component.

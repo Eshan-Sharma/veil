@@ -1,0 +1,219 @@
+---
+title: Database Schema
+description: Neon Postgres schema — every table, column, and index used by the Veil dApp server.
+---
+
+import { Callout } from 'nextra/components'
+
+# Database Schema
+
+The Veil dApp server caches on-chain state, logs transactions, curates the
+pool admin allowlist, and stores single-use auth nonces in
+[Neon Postgres](https://neon.tech). Six tables, all defined in
+`veil-landing/lib/db/schema.sql`.
+
+The migration is idempotent — re-running `npm run db:migrate` is safe.
+
+## Conventions
+
+- All on-chain numeric quantities are stored as `NUMERIC` (for `u64`-fitting
+  values like share counts) or `TEXT` (for `u128`-WAD values that exceed
+  Postgres's `BIGINT` range).
+- All public keys are stored as base58 `TEXT`.
+- All timestamps are `TIMESTAMPTZ` with `DEFAULT now()`.
+- Soft deletes (`revoked_at`) preferred over hard deletes for the
+  audit-relevant `pool_admins` table.
+
+## `pool_admins`
+
+The off-chain allowlist. A wallet is "active" iff it has a row with
+`revoked_at IS NULL`.
+
+```sql
+CREATE TABLE pool_admins (
+  pubkey       TEXT PRIMARY KEY,
+  role         TEXT NOT NULL DEFAULT 'pool_admin',
+                                       -- 'super_admin' | 'pool_admin'
+  label        TEXT,
+  added_by     TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX idx_pool_admins_role
+  ON pool_admins(role) WHERE revoked_at IS NULL;
+```
+
+| Column | Notes |
+|---|---|
+| `pubkey` | Base58 wallet address. PK ensures one role per wallet. |
+| `role` | Free string; routes enforce the closed set `{super_admin, pool_admin}`. |
+| `label` | Human-readable note (e.g. `"team multisig"`). |
+| `added_by` | Pubkey of the super-admin that inserted the row. `'system'` for the bootstrap row written by the migration. `'cli'` for rows added via `npm run db:add-admin`. |
+| `revoked_at` | Set on `DELETE /api/admin/allowlist`. Cannot revoke self. |
+
+The bootstrap super-admin is written by `lib/db/migrate.ts` from
+`SUPER_ADMIN_PUBKEY` in `.env.local`.
+
+## `pools`
+
+Cached `LendingPool` snapshot. Refreshed by `POST /api/pools/sync`.
+
+```sql
+CREATE TABLE pools (
+  pool_address     TEXT PRIMARY KEY,
+  token_mint       TEXT NOT NULL,
+  symbol           TEXT,
+  authority        TEXT NOT NULL,
+  vault            TEXT NOT NULL,
+  pool_bump        INTEGER NOT NULL,
+  authority_bump   INTEGER NOT NULL,
+  vault_bump       INTEGER NOT NULL,
+  paused           BOOLEAN NOT NULL DEFAULT false,
+
+  total_deposits   NUMERIC NOT NULL DEFAULT 0,
+  total_borrows    NUMERIC NOT NULL DEFAULT 0,
+  accumulated_fees NUMERIC NOT NULL DEFAULT 0,
+
+  ltv_wad                  TEXT,
+  liquidation_threshold_wad TEXT,
+  liquidation_bonus_wad    TEXT,
+  protocol_liq_fee_wad     TEXT,
+  reserve_factor_wad       TEXT,
+  close_factor_wad         TEXT,
+  base_rate_wad            TEXT,
+  optimal_util_wad         TEXT,
+  slope1_wad               TEXT,
+  slope2_wad               TEXT,
+  flash_fee_bps            INTEGER,
+
+  oracle_price       NUMERIC,
+  oracle_conf        NUMERIC,
+  oracle_expo        INTEGER,
+  pyth_price_feed    TEXT,
+
+  created_by         TEXT,
+  init_signature     TEXT,
+  last_synced_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_pools_mint      ON pools(token_mint);
+CREATE INDEX idx_pools_authority ON pools(authority);
+```
+
+WAD-scaled risk parameters (`ltv_wad`, `liquidation_threshold_wad`, etc.)
+are stored as `TEXT` because their u128 range overflows Postgres's signed
+`BIGINT`. Decode them on the read side as `BigInt(row.ltv_wad)`.
+
+## `positions`
+
+Cached `UserPosition` snapshot. Populated by indexers (none ship with v0.1
+— the schema is in place for future indexer work). The `health_factor_wad`
+column is what an automated liquidator would query.
+
+```sql
+CREATE TABLE positions (
+  position_address  TEXT PRIMARY KEY,
+  pool_address      TEXT NOT NULL REFERENCES pools(pool_address) ON DELETE CASCADE,
+  owner             TEXT NOT NULL,
+  deposit_shares    NUMERIC NOT NULL DEFAULT 0,
+  borrow_principal  NUMERIC NOT NULL DEFAULT 0,
+  deposit_idx_snap  TEXT,
+  borrow_idx_snap   TEXT,
+  health_factor_wad TEXT,
+  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_positions_owner  ON positions(owner);
+CREATE INDEX idx_positions_pool   ON positions(pool_address);
+CREATE INDEX idx_positions_health ON positions(health_factor_wad)
+  WHERE borrow_principal > 0;
+```
+
+The `idx_positions_health` partial index — only over rows with non-zero
+debt — is the index a liquidator bot will hit when scanning for unhealthy
+positions.
+
+## `tx_log`
+
+Append-only log of submitted transactions. The dApp posts to this from
+`useVeilActions` after `confirmTransaction` resolves. The `signature`
+column is `UNIQUE`, so callers can safely `POST` the same signature with
+an updated status (e.g. `pending` → `confirmed`) without creating a
+duplicate row — the endpoint uses `ON CONFLICT DO UPDATE`.
+
+```sql
+CREATE TABLE tx_log (
+  id              BIGSERIAL PRIMARY KEY,
+  signature       TEXT UNIQUE NOT NULL,
+  pool_address    TEXT,
+  wallet          TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  amount          NUMERIC,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  error_msg       TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_tx_log_wallet ON tx_log(wallet, created_at DESC);
+CREATE INDEX idx_tx_log_pool   ON tx_log(pool_address, created_at DESC);
+```
+
+`action` is a closed set:
+`'deposit' | 'withdraw' | 'borrow' | 'repay' | 'liquidate' | 'flash' |
+'init' | 'update_pool' | 'pause' | 'resume' | 'collect_fees' |
+'update_oracle'`.
+
+## `audit_log`
+
+Records administrative actions: allowlist additions/revocations, pool
+initialisations registered via `/api/pools/init`, and any future operations
+that warrant traceability.
+
+```sql
+CREATE TABLE audit_log (
+  id           BIGSERIAL PRIMARY KEY,
+  actor        TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  target       TEXT,
+  details      JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_audit_log_actor ON audit_log(actor, created_at DESC);
+```
+
+## `auth_nonces`
+
+Single-use ed25519 nonces for the admin auth handshake. The
+`/api/auth/nonce` endpoint inserts a row; protected endpoints
+`DELETE … RETURNING` to consume it atomically.
+
+```sql
+CREATE TABLE auth_nonces (
+  pubkey      TEXT NOT NULL,
+  nonce       TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (pubkey, nonce)
+);
+CREATE INDEX idx_auth_nonces_expires ON auth_nonces(expires_at);
+```
+
+The migration sets a TTL of 5 minutes; expired rows are GC'd opportunistically
+on every `/api/auth/nonce` call (`DELETE FROM auth_nonces WHERE expires_at <
+now()`).
+
+<Callout type="warning">
+  The `DATABASE_URL` is a high-trust secret. Anyone with write access to
+  this database can insert into `pool_admins` and bypass the signed-nonce
+  flow. Rotate it on team membership changes; treat it the way you would a
+  Stripe webhook key.
+</Callout>
+
+## Migration entrypoints
+
+| Command | Effect |
+|---|---|
+| `npm run db:migrate` | Applies `lib/db/schema.sql` and seeds `SUPER_ADMIN_PUBKEY` from `.env.local`. Idempotent. |
+| `npm run db:add-admin -- <pubkey> [pool_admin\|super_admin] [label]` | Direct insert into `pool_admins`. Idempotent on `pubkey`. |
+
+Both scripts are TypeScript files run via `tsx`; both source `.env.local`
+through `dotenv` at startup. Both connect via the Neon WebSocket Pool
+(rather than the HTTP serverless driver) so they can run multi-statement
+DDL in a transaction.

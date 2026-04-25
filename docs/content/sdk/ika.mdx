@@ -1,0 +1,119 @@
+---
+title: Ika Helpers
+description: PDA derivation and instruction builders for Ika dWallet integration.
+---
+
+# Ika Helpers
+
+The Ika module is in `lib/ika/`. Import from `lib/ika/index.ts` for all exports.
+
+## PDA Helpers (`lib/ika/pda.ts`)
+
+```typescript
+import {
+  findCpiAuthority,
+  findCoordinator,
+  findIkaPosition,
+  findMessageApproval,
+} from './lib/ika/pda';
+import { PROGRAM_ID } from './lib/veil/constants';
+import { SignatureScheme } from './lib/ika/types';
+
+// Veil CPI authority — must be the dWallet's authority before IkaRegister
+const [cpiAuthority, cpiAuthorityBump] = await findCpiAuthority(PROGRAM_ID);
+
+// Ika DWalletCoordinator PDA (on the Ika program)
+const [coordinator] = await findCoordinator();
+
+// IkaDwalletPosition PDA (on the Veil program)
+const [ikaPosition, positionBump] = await findIkaPosition(pool, user, PROGRAM_ID);
+
+// MessageApproval PDA (on the Ika program) — needed for IkaSign
+const [messageApproval, msgApprovalBump] = await findMessageApproval(
+  dwalletAddress,
+  sha256(message),          // 32-byte digest
+  new Uint8Array(32),        // metadata digest (zero if unused)
+  SignatureScheme.ECDSA_SHA256,
+);
+```
+
+## Instruction Builders (`lib/ika/instructions.ts`)
+
+```typescript
+import {
+  ikaRegisterIx,
+  ikaReleaseIx,
+  ikaSignIx,
+} from './lib/ika/instructions';
+
+// Register a dWallet as collateral
+const registerIx = ikaRegisterIx(
+  user, pool, dwalletAddress, ikaPosition, cpiAuthority,
+  1_200_000n,                    // USD cents ($12,000)
+  DWalletCurve.SECP256K1,
+  SignatureScheme.ECDSA_SHA256,
+  positionBump,
+  cpiAuthorityBump,
+);
+
+// Release a dWallet (return authority to user)
+const releaseIx = ikaReleaseIx(
+  user, pool, dwalletAddress, ikaPosition,
+  PROGRAM_ID,
+  cpiAuthority,
+  cpiAuthorityBump,
+);
+
+// Approve a cross-chain signing request
+const signIx = ikaSignIx(
+  user,
+  coordinator,
+  messageApproval,
+  dwalletAddress,
+  ikaPosition,
+  PROGRAM_ID,
+  cpiAuthority,
+  sha256(bitcoinTx),          // 32-byte message digest
+  new Uint8Array(32),          // metadata digest
+  user.toBytes(),              // 32-byte user pubkey
+  SignatureScheme.ECDSA_SHA256,
+  msgApprovalBump,
+  cpiAuthorityBump,
+);
+```
+
+## Enums (`lib/ika/types.ts`)
+
+```typescript
+export const DWalletCurve = {
+  SECP256K1:  0,   // Bitcoin, Ethereum
+  SECP256R1:  1,   // WebAuthn
+  CURVE25519: 2,   // Solana, Ed25519
+  RISTRETTO:  3,   // Substrate
+} as const;
+
+export const SignatureScheme = {
+  ECDSA_KECCAK256:      0,  // Ethereum
+  ECDSA_SHA256:         1,  // Bitcoin legacy
+  ECDSA_DOUBLE_SHA256:  2,  // Bitcoin BIP143
+  TAPROOT_SHA256:       3,  // Bitcoin Taproot
+  ECDSA_BLAKE2B256:     4,  // Zcash
+  EDDSA_SHA512:         5,  // Ed25519
+  SCHNORRKEL_MERLIN:    6,  // Substrate sr25519
+} as const;
+```
+
+## Typical Flow
+
+```typescript
+// Step 1: Create dWallet via Ika SDK (or frontend wizard)
+// Step 2: Transfer dWallet authority to Veil CPI PDA
+// Step 3: Register as collateral
+const tx = new Transaction().add(registerIx);
+await sendAndConfirmTransaction(connection, tx, [userKeypair]);
+
+// Later: sign a Bitcoin transaction
+const signTx = new Transaction().add(signIx);
+await sendAndConfirmTransaction(connection, signTx, [userKeypair]);
+// Ika MPC nodes observe the MessageApproval and produce the signature
+```

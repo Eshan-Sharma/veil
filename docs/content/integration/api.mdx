@@ -1,0 +1,353 @@
+---
+title: HTTP API Reference
+description: Every endpoint exposed by the Veil dApp server, with request/response shapes and auth requirements.
+---
+
+import { Callout } from 'nextra/components'
+
+# HTTP API Reference
+
+All routes live under `veil-landing/app/api/**/route.ts` and run on the
+Node runtime. The Neon HTTP driver (`@neondatabase/serverless`) is used for
+DB access; no WebSocket pool is opened per request.
+
+## Conventions
+
+- Request bodies are JSON. Bad JSON returns `400 {"error":"bad json"}`.
+- All authenticated endpoints accept `{actor, nonce, signature, ...payload}`.
+  See [Authorization Model](/integration/authorization) for the handshake.
+- Responses are JSON. Errors are `{"error": "<short reason>"}`.
+- Numeric on-chain quantities are returned as strings to preserve u64/u128
+  fidelity.
+
+---
+
+## Auth
+
+### `POST /api/auth/nonce`
+
+Issue a single-use signed-message nonce. TTL: 5 minutes.
+
+**Request**
+
+```json
+{
+  "pubkey": "<base58 wallet>",
+  "action": "<scoped action, e.g. \"add_admin:<pubkey>:<role>\">"
+}
+```
+
+**Response**
+
+```json
+{
+  "nonce": "<32-hex-char nonce>",
+  "message": "Veil admin auth\nAction: <action>\nNonce: <nonce>",
+  "expiresAt": "2026-04-25T08:39:31.950Z"
+}
+```
+
+The wallet signs the exact `message` bytes (UTF-8) with ed25519 detached
+signature. The base58-encoded signature goes into the protected endpoint's
+body as `signature`.
+
+Source: `app/api/auth/nonce/route.ts`.
+
+---
+
+## Admin
+
+### `GET /api/admin/me?pubkey=<wallet>`
+
+Read-only role lookup for UI gating. **Not authoritative** — the same role
+is re-checked server-side on every authenticated endpoint.
+
+**Response**
+
+```json
+{ "role": "super_admin" | "pool_admin" | null }
+```
+
+### `GET /api/admin/allowlist`
+
+Public list of currently active admins (revoked admins excluded).
+
+**Response**
+
+```json
+{
+  "admins": [
+    {
+      "pubkey": "...",
+      "role": "super_admin",
+      "label": "bootstrap",
+      "added_by": "system",
+      "created_at": "2026-04-25T08:26:29.249Z",
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+### `POST /api/admin/allowlist`
+
+Add a wallet to the allowlist. **Requires `super_admin` signed nonce.**
+The signed `action` is `add_admin:<pubkey>:<role>`.
+
+**Request**
+
+```json
+{
+  "actor":     "<super_admin pubkey>",
+  "nonce":     "<from /api/auth/nonce>",
+  "signature": "<base58 ed25519 sig over the canonical message>",
+  "pubkey":    "<wallet to add>",
+  "role":      "pool_admin" | "super_admin",
+  "label":     "<optional human label>"
+}
+```
+
+**Response on success**
+
+```json
+{ "ok": true }
+```
+
+**Failure cases**
+
+| Status | `error` | Cause |
+|---|---|---|
+| 400 | `missing fields` | One of actor/nonce/signature/pubkey absent |
+| 400 | `invalid role` | role ∉ \{`pool_admin`, `super_admin`\} |
+| 401 | `bad signature` | ed25519 verify failed |
+| 401 | `nonce invalid or expired` | Nonce already consumed or > 5 min old |
+| 401 | `not authorized` | Actor not in pool_admins (or revoked) |
+| 401 | `super_admin required` | Actor is pool_admin, not super_admin |
+
+### `DELETE /api/admin/allowlist`
+
+Soft-revoke a wallet (sets `revoked_at = now()`). **Requires `super_admin`
+signed nonce.** Signed action: `revoke_admin:<pubkey>`.
+
+**Request**
+
+```json
+{
+  "actor":     "<super_admin pubkey>",
+  "nonce":     "...",
+  "signature": "...",
+  "pubkey":    "<wallet to revoke>"
+}
+```
+
+The endpoint rejects `actor == pubkey` to prevent self-lockout.
+
+---
+
+## Pools
+
+### `GET /api/pools`
+
+Cached pool index (refreshed via `/api/pools/sync`).
+
+**Response**
+
+```json
+{
+  "pools": [
+    {
+      "pool_address": "...",
+      "token_mint":   "...",
+      "symbol":       "USDC" | null,
+      "authority":    "...",
+      "vault":        "...",
+      "pool_bump":    254,
+      "authority_bump": 255,
+      "vault_bump":   0,
+      "paused":       false,
+      "total_deposits":   "0",
+      "total_borrows":    "0",
+      "accumulated_fees": "0",
+      "ltv_wad":                    "750000000000000000",
+      "liquidation_threshold_wad":  "800000000000000000",
+      "liquidation_bonus_wad":      "50000000000000000",
+      "protocol_liq_fee_wad":       "100000000000000000",
+      "reserve_factor_wad":         "100000000000000000",
+      "close_factor_wad":           "500000000000000000",
+      "base_rate_wad":              "10000000000000000",
+      "optimal_util_wad":           "800000000000000000",
+      "slope1_wad":                 "40000000000000000",
+      "slope2_wad":                 "750000000000000000",
+      "flash_fee_bps":              9,
+      "oracle_price":               null,
+      "oracle_conf":                null,
+      "oracle_expo":                null,
+      "pyth_price_feed":            null,
+      "created_by":     "...",
+      "init_signature": "...",
+      "last_synced_at": "...",
+      "created_at":     "..."
+    }
+  ]
+}
+```
+
+### `POST /api/pools/init`
+
+Register an on-chain pool that the actor just initialised. **Requires the
+actor to be on the allowlist with role `pool_admin` or `super_admin`.**
+Signed action: `init_pool:<token_mint>`.
+
+**Request**
+
+```json
+{
+  "actor":     "...",
+  "nonce":     "...",
+  "signature": "...",
+  "pool_address":   "<derived PDA>",
+  "token_mint":     "...",
+  "symbol":         "USDC" | null,
+  "authority":      "<actor>",
+  "vault":          "<derived ATA>",
+  "pool_bump":      254,
+  "authority_bump": 255,
+  "vault_bump":     0,
+  "init_signature": "<solana tx sig>"
+}
+```
+
+The endpoint is idempotent on `pool_address` (`ON CONFLICT DO NOTHING`).
+A row in `audit_log` is written regardless of conflict outcome.
+
+### `POST /api/pools/sync`
+
+Refresh a pool's cached row from chain. Public.
+
+**Request**
+
+```json
+{ "pool_address": "<PDA>", "symbol": "USDC" }
+```
+
+The server calls `getAccountInfo`, decodes the bytes via the same TS
+decoder used by the dApp (`lib/veil/state.ts::decodeLendingPool`), and
+upserts the result into `pools`.
+
+**Response**
+
+```json
+{ "ok": true, "pool_address": "..." }
+```
+
+Errors: `400 bad pubkey`, `404 pool account not found`.
+
+---
+
+## Positions
+
+### `GET /api/positions/[user]`
+
+Cached positions for a wallet, sorted by `last_synced_at DESC`.
+
+**Response**
+
+```json
+{
+  "positions": [
+    {
+      "position_address": "...",
+      "pool_address":     "...",
+      "owner":            "<user>",
+      "deposit_shares":   "0",
+      "borrow_principal": "0",
+      "deposit_idx_snap": "1000000000000000000",
+      "borrow_idx_snap":  "1000000000000000000",
+      "health_factor_wad": "...",
+      "last_synced_at":   "..."
+    }
+  ]
+}
+```
+
+<Callout type="info">
+  Position rows are populated by indexers / liquidator bots, not by the dApp
+  flow today. The schema and endpoints exist so an indexer can write here
+  and the liquidator UI can scan unhealthy positions efficiently.
+</Callout>
+
+---
+
+## Transactions
+
+### `GET /api/transactions?wallet=<pubkey>&pool=<pool>&limit=50`
+
+Append-only tx log. Filters: `wallet`, `pool`, `limit` (max 200, default 50).
+
+**Response**
+
+```json
+{
+  "transactions": [
+    {
+      "id":           42,
+      "signature":    "...",
+      "pool_address": "...",
+      "wallet":       "...",
+      "action":       "deposit" | "withdraw" | "borrow" | "repay" |
+                      "liquidate" | "flash" | "init" | "update_pool" |
+                      "pause" | "resume" | "collect_fees" | "update_oracle",
+      "amount":       "1000000",
+      "status":       "pending" | "confirmed" | "failed",
+      "error_msg":    null,
+      "created_at":   "..."
+    }
+  ]
+}
+```
+
+### `POST /api/transactions`
+
+Append a confirmed (or failed) transaction. Idempotent on `signature`
+(`ON CONFLICT DO UPDATE` with the new status). Called by the dApp after
+the wallet returns a tx signature.
+
+**Request**
+
+```json
+{
+  "signature":    "...",
+  "wallet":       "...",
+  "action":       "deposit",
+  "pool_address": "...",
+  "amount":       "1000000",
+  "status":       "confirmed",
+  "error_msg":    null
+}
+```
+
+---
+
+## Error code mapping
+
+API errors map to short, redacted strings to avoid leaking implementation
+detail. The set is closed:
+
+| Returned `error` | HTTP | Where it comes from |
+|---|---|---|
+| `bad json` | 400 | `req.json()` rejected |
+| `missing fields` | 400 | required fields absent |
+| `pubkey and action required` | 400 | nonce endpoint |
+| `invalid pubkey` | 400 | length/charset check |
+| `invalid role` | 400 | role validation |
+| `bad pubkey: <reason>` | 400 | `new PublicKey()` threw |
+| `cannot revoke yourself` | 400 | self-lockout guard |
+| `pool account not found` | 404 | `getAccountInfo` returned null |
+| `pool_address required` | 400 | sync endpoint |
+| `signature, wallet, action required` | 400 | tx log endpoint |
+| `bad signature` | 401 | TweetNaCl verify failed |
+| `nonce invalid or expired` | 401 | `auth_nonces` row absent or stale |
+| `not authorized` | 401 | actor not in pool_admins |
+| `super_admin required` | 401 | role mismatch |
+
+Source: `app/api/**/route.ts`, `lib/auth/admin.ts`.

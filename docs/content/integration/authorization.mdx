@@ -1,0 +1,209 @@
+---
+title: Authorization Model
+description: How Veil layers on-chain pool authority, off-chain allowlist gating, and ed25519 signed nonces — and where each is the source of truth.
+---
+
+import { Callout } from 'nextra/components'
+
+# Authorization Model
+
+Veil has **two independent authorization layers** that must both be satisfied
+to administer a canonical pool through the curated UI:
+
+1. **On-chain authority** — `LendingPool.authority` set at `Initialize`. The
+   only thing that gates Update/Pause/Resume/CollectFees on the program.
+2. **Off-chain allowlist** — `pool_admins` table on Neon. Gates which
+   wallets the curated UI permits to start the on-chain `Initialize` flow,
+   and which wallets can manage the allowlist itself.
+
+These layers are *defense in depth*, not a single chain of trust. Either
+can be bypassed without invalidating the other:
+
+- An attacker who compromises the Neon database cannot steal an existing
+  pool — `pool.authority` lives on chain.
+- An attacker who compromises an `authority` keypair owns that one pool
+  but cannot register new pools into the canonical index.
+
+## Roles
+
+| Role | Granted by | Can do |
+|---|---|---|
+| **User** | wallet ownership | All non-admin instructions on positions they own |
+| **Liquidator** | wallet ownership | Liquidate any unhealthy position (permissionless) |
+| **Pool admin** | being in `pool_admins` with role `pool_admin` (or higher) | Use the curated UI to call `Initialize` and manage pools they authorise on chain |
+| **Super-admin** | `pool_admins.role = 'super_admin'` | Add/revoke entries in the allowlist |
+
+The bootstrap super-admin is seeded by the migration script from
+`SUPER_ADMIN_PUBKEY` in `.env.local`. From there, super-admins can add more
+super-admins or pool-admins via the `/dapp/admin → Allowlist` tab or the
+`db:add-admin` CLI.
+
+## On-chain authority
+
+```rust
+// programs/src/state/lending_pool.rs
+pub struct LendingPool {
+    pub discriminator: [u8; 8],
+    pub authority:     Address,   // <-- set ONCE at Initialize
+    ...
+}
+```
+
+Set during `Initialize` to the `authority` signer (`accounts[1]`).
+
+```rust
+// programs/src/instructions/initialize.rs (excerpt)
+LendingPool::init(
+    pool,
+    authority.address(),  // <-- this becomes pool.authority forever
+    token_mint.address(),
+    ...
+)?;
+```
+
+Every admin instruction performs the check:
+
+```rust
+let pool = LendingPool::from_account_mut(&accounts[pool_idx])?;
+if pool.authority != *accounts[signer_idx].address() {
+    return Err(LendError::Unauthorized.into());  // error 6021
+}
+```
+
+Citations:
+- `programs/src/instructions/update_pool.rs:102-105`
+- `programs/src/instructions/pause_pool.rs`
+- `programs/src/instructions/resume_pool.rs`
+- `programs/src/instructions/collect_fees.rs`
+
+There is no `transferAuthority` instruction in v0.1. Authority migration is
+a roadmap item; for now, choose your `Initialize` signer carefully — a
+Squads multisig vault PDA is the recommended target for production
+deployments.
+
+<Callout type="warning">
+  `UpdatePool` has **no timelock**. A malicious authority can collapse
+  `liquidation_threshold` to zero and front-run the next block's
+  liquidations. For mainnet, put a governance program with a timelock in
+  front of the authority.
+</Callout>
+
+## Off-chain allowlist
+
+The on-chain `Initialize` instruction is permissionless: any signer can
+create a pool. The canonical Veil dApp will only display, sync, and route
+to pools that have been registered via `POST /api/pools/init`, which is
+allowlist-gated. This separates *the existence of a pool on chain* from
+*the existence of a pool in Veil's curated index*.
+
+### The signed-nonce handshake
+
+Every privileged API call runs through this five-step handshake:
+
+```
+┌──────────────┐                  ┌──────────────┐                ┌──────────────┐
+│   Browser    │                  │    Server    │                │   Postgres   │
+└──────┬───────┘                  └──────┬───────┘                └──────┬───────┘
+       │                                 │                               │
+   1.  │  POST /api/auth/nonce           │                               │
+       │  {pubkey, action}               │                               │
+       ├────────────────────────────────►│                               │
+       │                                 │  INSERT auth_nonces           │
+       │                                 ├──────────────────────────────►│
+       │                                 │                               │
+       │  {nonce, message}               │                               │
+       │◄────────────────────────────────┤                               │
+       │                                 │                               │
+   2.  │  msg = "Veil admin auth\n       │                               │
+       │         Action: <action>\n      │                               │
+       │         Nonce: <nonce>"         │                               │
+       │  sig = wallet.signMessage(msg)  │                               │
+       │                                 │                               │
+   3.  │  POST /api/admin/...            │                               │
+       │  {actor, nonce, signature, ...} │                               │
+       ├────────────────────────────────►│                               │
+       │                                 │                               │
+   4.  │                                 │  TweetNaCl verify(sig, msg,   │
+       │                                 │                  actor)        │
+       │                                 │                               │
+   5a. │                                 │  DELETE FROM auth_nonces      │
+       │                                 │   WHERE pubkey=actor          │
+       │                                 │     AND nonce=nonce           │
+       │                                 │     AND expires_at>now()      │
+       │                                 │   RETURNING nonce             │
+       │                                 ├──────────────────────────────►│
+       │                                 │  (atomic single-use)          │
+       │                                 │                               │
+   5b. │                                 │  SELECT role FROM pool_admins │
+       │                                 │   WHERE pubkey=actor          │
+       │                                 │     AND revoked_at IS NULL    │
+       │                                 ├──────────────────────────────►│
+       │                                 │                               │
+   5c. │                                 │  if requireRole='super_admin' │
+       │                                 │      and role!='super_admin'  │
+       │                                 │      reject 401               │
+       │                                 │                               │
+       │  200 ok                         │                               │
+       │◄────────────────────────────────┤                               │
+```
+
+Every property below is required for the request to succeed:
+
+| Property | Why |
+|---|---|
+| Signature is over the *exact* canonical message bytes | Prevents reuse of signatures from other contexts |
+| Nonce is single-use | Prevents replay |
+| Nonce expires after 5 minutes | Limits the window for stolen nonces |
+| Nonce is per-wallet | A nonce issued to A cannot be used by B |
+| Action is encoded into the message | Signature for `add_admin:X:role` cannot be replayed as `revoke_admin:X` |
+| Allowlist re-check on every request | Revoked admins lose access immediately |
+
+The verifier source: `veil-landing/lib/auth/admin.ts:21-66`. The nonce
+issuer: `veil-landing/app/api/auth/nonce/route.ts`.
+
+## What's *not* protected by the allowlist
+
+The allowlist is intentionally narrow:
+
+- It does **not** prevent a non-allowlisted wallet from calling the on-chain
+  `Initialize` instruction. That call would succeed; the pool simply
+  wouldn't be registered in `pools` and wouldn't appear in the canonical UI.
+- It does **not** gate user-facing instructions (Deposit/Withdraw/etc.).
+  Those are permissionless and rely solely on on-chain checks.
+- It does **not** gate `Liquidate`. Liquidations are explicitly permissionless
+  to ensure the protocol stays solvent regardless of admin liveness.
+- It does **not** gate `UpdateOraclePrice`. Anyone can keep the oracle fresh.
+
+## Why this two-layer design
+
+A single layer would force one of two compromises:
+
+- **On-chain only.** Spam pools become indistinguishable from canonical
+  pools. The dApp would need to whitelist authorities client-side, which
+  is identical to an off-chain allowlist except harder to update.
+- **Off-chain only.** A compromised database becomes a compromised
+  protocol. Veil keeps `pool.authority` as the on-chain source of truth,
+  so even if the allowlist is wiped, existing pools remain governed by
+  their on-chain authorities.
+
+## Bootstrap and recovery
+
+The migration's super-admin seed is the only privileged write that does
+not require a signed nonce. After bootstrap:
+
+| Operation | Requires signed nonce? | Notes |
+|---|---|---|
+| First super-admin (bootstrap) | No | Migration writes from env var |
+| Add admin via UI | Yes (super-admin) | Action: `add_admin:<pubkey>:<role>` |
+| Add admin via CLI | No | `npm run db:add-admin` — direct DB insert |
+| Revoke admin via UI | Yes (super-admin) | Action: `revoke_admin:<pubkey>` |
+| Recover from total super-admin loss | — | Re-run migration with new `SUPER_ADMIN_PUBKEY` |
+
+The CLI exists as a recovery path. Treat database access as the equivalent
+of a super-admin private key.
+
+## Cross-references
+
+- HTTP shapes: [HTTP API → Admin](/integration/api#admin)
+- Storage: [Database Schema → pool_admins](/integration/database#pool_admins)
+- On-chain authorisation: [Whitepaper §7](/whitepaper#7-authorization-model)
