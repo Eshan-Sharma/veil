@@ -185,7 +185,7 @@ export default function LiquidatePage() {
           <div style={{ padding: "12px 14px", background: "#fffbeb", border: "1px solid #fef08a", borderRadius: 10, fontSize: 12, color: "#854d0e", marginBottom: 14, lineHeight: 1.6 }}>
             <strong>Reverts if borrower is healthy.</strong> The on-chain check requires
             health_factor &lt; 1.0 (WAD). Repay amount is auto-set to debt × close_factor (default 50%).
-            Liquidator receives repay × (1 + bonus) × (1 − protocol_fee) in the {selected.symbol} pool.
+            Liquidator receives repay × (1 + bonus) × (1 − protocol_fee) in the {selected?.symbol ?? "—"} pool.
           </div>
 
           <button onClick={handleSubmit} disabled={busy || !publicKey || !borrower.trim()}
