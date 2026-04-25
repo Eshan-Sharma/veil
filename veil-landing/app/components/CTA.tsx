@@ -26,13 +26,13 @@ export default function CTA() {
                 Pledge native BTC, physical gold, or any on-chain asset. Borrow in private. Keep every balance encrypted. Solana coordinates — your capital stays where it belongs.
               </p>
               <div className="mt-8 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-                <a href="#" className="group inline-flex h-12 items-center gap-2 rounded-full bg-white pl-6 pr-5 text-[14.5px] font-semibold text-zinc-950 transition hover:bg-white/90">
+                <a href="/dapp" className="group inline-flex h-12 items-center gap-2 rounded-full bg-white pl-6 pr-5 text-[14.5px] font-semibold text-zinc-950 transition hover:bg-white/90">
                   Launch app
                   <span className="grid h-7 w-7 place-items-center rounded-full bg-zinc-950/10">
                     <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M5 10h10M10 5l5 5-5 5"/></svg>
                   </span>
                 </a>
-                <a href="https://github.com/eshan-sharma/veil" target="_blank" rel="noreferrer" className="inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 text-[14.5px] font-medium text-white backdrop-blur transition hover:bg-white/10">
+                <a href={`${process.env.NEXT_PUBLIC_DOCS_URL ?? "https://docsveil.vercel.app"}/whitepaper`} target="_blank" rel="noreferrer" className="inline-flex h-12 items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 text-[14.5px] font-medium text-white backdrop-blur transition hover:bg-white/10">
                   Read the whitepaper
                   <svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M7 13l6-6M7 7h6v6"/></svg>
                 </a>

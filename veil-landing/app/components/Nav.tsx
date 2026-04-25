@@ -48,7 +48,7 @@ export default function Nav() {
           </div>
           <div className="flex items-center gap-1.5">
             <a
-              href={process.env.NEXT_PUBLIC_DOCS_URL ?? "https://docs.veil.finance"}
+              href={process.env.NEXT_PUBLIC_DOCS_URL ?? "https://docsveil.vercel.app"}
               target="_blank"
               rel="noreferrer"
               className="hidden rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 sm:block"

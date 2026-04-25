@@ -27,7 +27,7 @@ export default function Footer() {
           ]} />
           <Column title="Resources" items={[
             ["GitHub", "https://github.com/eshan-sharma/veil"],
-            ["Whitepaper", "#"],
+            ["Whitepaper", `${process.env.NEXT_PUBLIC_DOCS_URL ?? "https://docsveil.vercel.app"}/whitepaper`],
             ["Architecture (SVG)", "https://github.com/eshan-sharma/veil/blob/main/docs/veil_architecture.svg"],
             ["Personas", "https://github.com/eshan-sharma/veil/blob/main/docs/user_persona.md"],
           ]} />
