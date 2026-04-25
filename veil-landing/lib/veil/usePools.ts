@@ -49,6 +49,14 @@ export interface PoolView {
   accumulatedFees: bigint;
   ltvWad: bigint | null;
   liquidationThresholdWad: bigint | null;
+  liquidationBonusWad: bigint | null;
+  protocolLiqFeeWad: bigint | null;
+  reserveFactorWad: bigint | null;
+  closeFactorWad: bigint | null;
+  baseRateWad: bigint | null;
+  optimalUtilWad: bigint | null;
+  slope1Wad: bigint | null;
+  slope2Wad: bigint | null;
   flashFeeBps: number | null;
   source: "api" | "fallback";
 }
@@ -70,6 +78,14 @@ function toView(p: ApiPool): PoolView {
     accumulatedFees: BigInt(p.accumulated_fees ?? "0"),
     ltvWad: p.ltv_wad ? BigInt(p.ltv_wad) : null,
     liquidationThresholdWad: p.liquidation_threshold_wad ? BigInt(p.liquidation_threshold_wad) : null,
+    liquidationBonusWad: p.liquidation_bonus_wad ? BigInt(p.liquidation_bonus_wad) : null,
+    protocolLiqFeeWad: p.protocol_liq_fee_wad ? BigInt(p.protocol_liq_fee_wad) : null,
+    reserveFactorWad: p.reserve_factor_wad ? BigInt(p.reserve_factor_wad) : null,
+    closeFactorWad: p.close_factor_wad ? BigInt(p.close_factor_wad) : null,
+    baseRateWad: p.base_rate_wad ? BigInt(p.base_rate_wad) : null,
+    optimalUtilWad: p.optimal_util_wad ? BigInt(p.optimal_util_wad) : null,
+    slope1Wad: p.slope1_wad ? BigInt(p.slope1_wad) : null,
+    slope2Wad: p.slope2_wad ? BigInt(p.slope2_wad) : null,
     flashFeeBps: p.flash_fee_bps,
     source: "api",
   };
