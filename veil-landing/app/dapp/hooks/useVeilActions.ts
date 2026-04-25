@@ -12,34 +12,11 @@ import {
   liquidateIx,
   flashBorrowIx,
   flashRepayIx,
-  findPoolAddress,
   findPoolAuthorityAddress,
   findPositionAddress,
-  findVaultAddress,
   TOKEN_PROGRAM_ID,
 } from "@/lib/veil";
-
-/**
- * Devnet token mints for each pool.
- * Override via env vars after deploying and initializing pools.
- */
-export const POOL_MINTS: Record<string, PublicKey> = {
-  sol: new PublicKey(
-    process.env.NEXT_PUBLIC_SOL_MINT ?? "So11111111111111111111111111111111111111112"
-  ),
-  btc: new PublicKey(
-    process.env.NEXT_PUBLIC_BTC_MINT ?? "11111111111111111111111111111111"
-  ),
-  eth: new PublicKey(
-    process.env.NEXT_PUBLIC_ETH_MINT ?? "11111111111111111111111111111111"
-  ),
-  xau: new PublicKey(
-    process.env.NEXT_PUBLIC_XAU_MINT ?? "11111111111111111111111111111111"
-  ),
-  usdc: new PublicKey(
-    process.env.NEXT_PUBLIC_USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
-  ),
-};
+import type { PoolView } from "@/lib/veil/usePools";
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
@@ -100,17 +77,13 @@ export function useVeilActions() {
   }
 
   const deposit = useCallback(
-    async (poolId: string, amount: bigint) => {
+    async (pool: PoolView, amount: bigint) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const [authority] = findPoolAuthorityAddress(pool);
-      const vault = findVaultAddress(mint, authority);
-      const [position, positionBump] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [position, positionBump] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       await sendTx(
-        () => depositIx(publicKey, userToken, vault, pool, position, amount, positionBump),
-        { action: "deposit", poolAddress: pool.toBase58(), amount },
+        () => depositIx(publicKey, userToken, pool.vault, pool.poolAddress, position, amount, positionBump),
+        { action: "deposit", poolAddress: pool.poolAddress.toBase58(), amount },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,17 +91,14 @@ export function useVeilActions() {
   );
 
   const withdraw = useCallback(
-    async (poolId: string, shares: bigint) => {
+    async (pool: PoolView, shares: bigint) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const [authority] = findPoolAuthorityAddress(pool);
-      const vault = findVaultAddress(mint, authority);
-      const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [authority] = findPoolAuthorityAddress(pool.poolAddress);
+      const [position] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       await sendTx(
-        () => withdrawIx(publicKey, userToken, vault, pool, position, authority, shares),
-        { action: "withdraw", poolAddress: pool.toBase58(), amount: shares },
+        () => withdrawIx(publicKey, userToken, pool.vault, pool.poolAddress, position, authority, shares),
+        { action: "withdraw", poolAddress: pool.poolAddress.toBase58(), amount: shares },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,17 +106,14 @@ export function useVeilActions() {
   );
 
   const borrow = useCallback(
-    async (poolId: string, amount: bigint) => {
+    async (pool: PoolView, amount: bigint) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const [authority] = findPoolAuthorityAddress(pool);
-      const vault = findVaultAddress(mint, authority);
-      const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [authority] = findPoolAuthorityAddress(pool.poolAddress);
+      const [position] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       await sendTx(
-        () => borrowIx(publicKey, userToken, vault, pool, position, authority, amount),
-        { action: "borrow", poolAddress: pool.toBase58(), amount },
+        () => borrowIx(publicKey, userToken, pool.vault, pool.poolAddress, position, authority, amount),
+        { action: "borrow", poolAddress: pool.poolAddress.toBase58(), amount },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,16 +121,13 @@ export function useVeilActions() {
   );
 
   const repay = useCallback(
-    async (poolId: string, amount: bigint) => {
+    async (pool: PoolView, amount: bigint) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const vault = findVaultAddress(mint, findPoolAuthorityAddress(pool)[0]);
-      const [position] = findPositionAddress(pool, publicKey);
-      const userToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [position] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       await sendTx(
-        () => repayIx(publicKey, userToken, vault, pool, position, amount),
-        { action: "repay", poolAddress: pool.toBase58(), amount },
+        () => repayIx(publicKey, userToken, pool.vault, pool.poolAddress, position, amount),
+        { action: "repay", poolAddress: pool.poolAddress.toBase58(), amount },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,17 +135,14 @@ export function useVeilActions() {
   );
 
   const liquidate = useCallback(
-    async (poolId: string, borrower: PublicKey) => {
+    async (pool: PoolView, borrower: PublicKey) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const [authority] = findPoolAuthorityAddress(pool);
-      const vault = findVaultAddress(mint, authority);
-      const [borrowerPos] = findPositionAddress(pool, borrower);
-      const liquidatorToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [authority] = findPoolAuthorityAddress(pool.poolAddress);
+      const [borrowerPos] = findPositionAddress(pool.poolAddress, borrower);
+      const liquidatorToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       await sendTx(
-        () => liquidateIx(publicKey, liquidatorToken, vault, pool, borrowerPos, authority),
-        { action: "liquidate", poolAddress: pool.toBase58() },
+        () => liquidateIx(publicKey, liquidatorToken, pool.vault, pool.poolAddress, borrowerPos, authority),
+        { action: "liquidate", poolAddress: pool.poolAddress.toBase58() },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -189,16 +150,13 @@ export function useVeilActions() {
   );
 
   const flashExecute = useCallback(
-    async (poolId: string, amount: bigint) => {
+    async (pool: PoolView, amount: bigint) => {
       if (!publicKey) return;
-      const mint = POOL_MINTS[poolId];
-      const [pool] = findPoolAddress(mint);
-      const [authority] = findPoolAuthorityAddress(pool);
-      const vault = findVaultAddress(mint, authority);
-      const borrowerToken = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+      const [authority] = findPoolAuthorityAddress(pool.poolAddress);
+      const borrowerToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
       const tx = new Transaction();
-      tx.add(flashBorrowIx(publicKey, borrowerToken, vault, pool, authority, amount));
-      tx.add(flashRepayIx(publicKey, borrowerToken, vault, pool));
+      tx.add(flashBorrowIx(publicKey, borrowerToken, pool.vault, pool.poolAddress, authority, amount));
+      tx.add(flashRepayIx(publicKey, borrowerToken, pool.vault, pool.poolAddress));
       setStatus("building"); setErrorMsg(null); setTxSig(null);
       try {
         const { blockhash } = await connection.getLatestBlockhash();
@@ -211,8 +169,8 @@ export function useVeilActions() {
         setStatus("success");
         setTxSig(sig);
         logTx({ signature: sig, wallet: publicKey.toBase58(), action: "flash",
-                pool_address: pool.toBase58(), amount, status: "confirmed" });
-        syncPool(pool.toBase58());
+                pool_address: pool.poolAddress.toBase58(), amount, status: "confirmed" });
+        syncPool(pool.poolAddress.toBase58());
       } catch (e: unknown) {
         setStatus("error");
         setErrorMsg(e instanceof Error ? e.message : "Transaction failed");

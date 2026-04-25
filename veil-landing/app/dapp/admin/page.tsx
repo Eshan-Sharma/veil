@@ -12,22 +12,23 @@ import {
   collectFeesIx,
   type UpdatePoolParams,
 } from "@/lib/veil/instructions";
-import { findPoolAddress, findPoolAuthorityAddress, findVaultAddress } from "@/lib/veil/pda";
+import { findPoolAuthorityAddress } from "@/lib/veil/pda";
 import { WAD } from "@/lib/veil/constants";
 import { useAdminRole } from "./hooks/useAdminRole";
 import { InitPoolPanel } from "./components/InitPoolPanel";
 import { AllowlistPanel } from "./components/AllowlistPanel";
 import { AuditLogPanel } from "./components/AuditLogPanel";
 
-// ─── Pool Mints (devnet) ──────────────────────────────────────────────────────
+// ─── Symbol → icon / color mapping ───────────────────────────────────────────
 
-const POOL_MINTS: Record<string, string> = {
-  sol:  process.env.NEXT_PUBLIC_SOL_MINT  ?? "So11111111111111111111111111111111111111112",
-  btc:  process.env.NEXT_PUBLIC_BTC_MINT  ?? "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
-  eth:  process.env.NEXT_PUBLIC_ETH_MINT  ?? "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
-  xau:  process.env.NEXT_PUBLIC_XAU_MINT  ?? "FAksmWHtMiJBUHBVJTExKmGrHo8RNZBcEJuPpvHPG3wy",
-  usdc: process.env.NEXT_PUBLIC_USDC_MINT ?? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+const SYMBOL_META: Record<string, { icon: string; color: string }> = {
+  SOL:  { icon: "◎", color: "#7c3aed" },
+  BTC:  { icon: "₿", color: "#f97316" },
+  ETH:  { icon: "Ξ", color: "#6366f1" },
+  XAU:  { icon: "◈", color: "#ca8a04" },
+  USDC: { icon: "$", color: "#2563eb" },
 };
+const DEFAULT_META = { icon: "●", color: "#6b7280" };
 
 // ─── WAD conversion helpers ───────────────────────────────────────────────────
 
@@ -39,13 +40,31 @@ function percentToWad(pct: string): bigint {
   return totalCentiPercent * (WAD / 10000n);
 }
 
-// ─── Pool definitions ─────────────────────────────────────────────────────────
+// ─── WAD → percent helper ────────────────────────────────────────────────────
+
+function wadToPercent(wad: string | null): string {
+  if (!wad) return "0";
+  const val = BigInt(wad);
+  // percent = val * 10000 / WAD, then format with 2 decimals
+  const centiPercent = val * 10000n / WAD;
+  const intPart = centiPercent / 100n;
+  const decPart = centiPercent % 100n;
+  if (decPart === 0n) return intPart.toString();
+  return `${intPart}.${decPart.toString().padStart(2, "0").replace(/0+$/, "")}`;
+}
+
+// ─── Pool types ──────────────────────────────────────────────────────────────
 
 interface AdminPool {
-  id: string;
+  pool_address: string;
+  token_mint: string;
   symbol: string;
   icon: string;
   color: string;
+  vault: string;
+  authority: string;
+  pool_bump: number;
+  authority_bump: number;
   accumulatedFees: string;
   paused: boolean;
   defaults: FormState;
@@ -65,18 +84,59 @@ interface FormState {
   flashFeeBps: string;
 }
 
-const ADMIN_POOLS: AdminPool[] = [
-  { id: "sol", symbol: "SOL", icon: "◎", color: "#7c3aed", accumulatedFees: "$1,240", paused: false,
-    defaults: { ltv: "68", liqThreshold: "73", liqBonus: "7.50", protocolLiqFee: "1.00", reserveFactor: "10", closeFactor: "50", baseRate: "2", optimalUtil: "80", slope1: "8", slope2: "100", flashFeeBps: "9" } },
-  { id: "btc", symbol: "BTC", icon: "₿", color: "#f97316", accumulatedFees: "$3,810", paused: false,
-    defaults: { ltv: "73", liqThreshold: "78", liqBonus: "5.50", protocolLiqFee: "1.00", reserveFactor: "10", closeFactor: "50", baseRate: "1", optimalUtil: "75", slope1: "6", slope2: "80", flashFeeBps: "9" } },
-  { id: "eth", symbol: "ETH", icon: "Ξ", color: "#6366f1", accumulatedFees: "$620", paused: false,
-    defaults: { ltv: "75", liqThreshold: "80", liqBonus: "5.00", protocolLiqFee: "1.00", reserveFactor: "10", closeFactor: "50", baseRate: "1", optimalUtil: "80", slope1: "7", slope2: "90", flashFeeBps: "9" } },
-  { id: "xau", symbol: "XAU", icon: "◈", color: "#ca8a04", accumulatedFees: "$290", paused: false,
-    defaults: { ltv: "60", liqThreshold: "65", liqBonus: "7.50", protocolLiqFee: "1.00", reserveFactor: "15", closeFactor: "50", baseRate: "1", optimalUtil: "70", slope1: "5", slope2: "60", flashFeeBps: "9" } },
-  { id: "usdc", symbol: "USDC", icon: "$", color: "#2563eb", accumulatedFees: "$4,100", paused: false,
-    defaults: { ltv: "85", liqThreshold: "88", liqBonus: "4.50", protocolLiqFee: "0.50", reserveFactor: "5", closeFactor: "50", baseRate: "0", optimalUtil: "90", slope1: "6", slope2: "60", flashFeeBps: "9" } },
-];
+interface ApiPoolRow {
+  pool_address: string;
+  token_mint: string;
+  symbol: string | null;
+  authority: string;
+  vault: string;
+  pool_bump: number;
+  authority_bump: number;
+  paused: boolean;
+  accumulated_fees: string;
+  ltv_wad: string | null;
+  liquidation_threshold_wad: string | null;
+  liquidation_bonus_wad: string | null;
+  protocol_liq_fee_wad: string | null;
+  reserve_factor_wad: string | null;
+  close_factor_wad: string | null;
+  base_rate_wad: string | null;
+  optimal_util_wad: string | null;
+  slope1_wad: string | null;
+  slope2_wad: string | null;
+  flash_fee_bps: number | null;
+}
+
+function apiPoolToAdminPool(row: ApiPoolRow): AdminPool {
+  const sym = (row.symbol ?? row.token_mint.slice(0, 4)).toUpperCase();
+  const meta = SYMBOL_META[sym] ?? DEFAULT_META;
+  return {
+    pool_address: row.pool_address,
+    token_mint: row.token_mint,
+    symbol: sym,
+    icon: meta.icon,
+    color: meta.color,
+    vault: row.vault,
+    authority: row.authority,
+    pool_bump: row.pool_bump,
+    authority_bump: row.authority_bump,
+    accumulatedFees: row.accumulated_fees ?? "0",
+    paused: row.paused,
+    defaults: {
+      ltv: wadToPercent(row.ltv_wad),
+      liqThreshold: wadToPercent(row.liquidation_threshold_wad),
+      liqBonus: wadToPercent(row.liquidation_bonus_wad),
+      protocolLiqFee: wadToPercent(row.protocol_liq_fee_wad),
+      reserveFactor: wadToPercent(row.reserve_factor_wad),
+      closeFactor: wadToPercent(row.close_factor_wad),
+      baseRate: wadToPercent(row.base_rate_wad),
+      optimalUtil: wadToPercent(row.optimal_util_wad),
+      slope1: wadToPercent(row.slope1_wad),
+      slope2: wadToPercent(row.slope2_wad),
+      flashFeeBps: String(row.flash_fee_bps ?? 0),
+    },
+  };
+}
 
 type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 type Tab = "pools" | "init" | "allowlist" | "audit";
@@ -181,8 +241,7 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
     if (!publicKey) return;
     setStatus("building");
     try {
-      const mintKey = new PublicKey(POOL_MINTS[pool.id]);
-      const [poolPda] = findPoolAddress(mintKey);
+      const poolPda = new PublicKey(pool.pool_address);
       const ix = buildIx(poolPda);
 
       const tx = new Transaction();
@@ -215,7 +274,7 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
       setErr(e instanceof Error ? e.message : String(e));
       setStatus("error");
     }
-  }, [publicKey, connection, sendTransaction, pool.id, pool.symbol]);
+  }, [publicKey, connection, sendTransaction, pool.pool_address, pool.symbol, pool.vault]);
 
   async function handlePause() {
     setPauseStatus("idle"); setPauseSig(undefined); setPauseErr(undefined);
@@ -224,7 +283,7 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
       (poolPda) => isPaused ? resumePoolIx(publicKey!, poolPda) : pausePoolIx(publicKey!, poolPda),
       setPauseStatus, setPauseSig, setPauseErr, isPaused ? "resume" : "pause",
     );
-    onPausedChange(pool.id, !isPaused);
+    onPausedChange(pool.pool_address, !isPaused);
   }
 
   async function handleUpdate() {
@@ -253,11 +312,10 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
     if (!treasury.trim()) { setFeesStatus("error"); setFeesErr("Enter a treasury token account address"); return; }
     setFeesStatus("idle"); setFeesSig(undefined); setFeesErr(undefined);
     await sendTx((poolPda) => {
-      const mintKey = new PublicKey(POOL_MINTS[pool.id]);
       const [poolAuthority] = findPoolAuthorityAddress(poolPda);
-      const vault = findVaultAddress(mintKey, poolAuthority);
+      const vaultKey = new PublicKey(pool.vault);
       const treasuryKey = new PublicKey(treasury.trim());
-      return collectFeesIx(publicKey!, poolPda, vault, treasuryKey, poolAuthority);
+      return collectFeesIx(publicKey!, poolPda, vaultKey, treasuryKey, poolAuthority);
     }, setFeesStatus, setFeesSig, setFeesErr, "collect_fees");
   }
 
@@ -367,12 +425,53 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
 // ─── Pools view ───────────────────────────────────────────────────────────────
 
 function PoolsView() {
-  const [selectedId, setSelectedId] = useState("sol");
-  const [poolState, setPoolState] = useState<AdminPool[]>(ADMIN_POOLS);
-  const selectedPool = poolState.find((p) => p.id === selectedId)!;
+  const [pools, setPools] = useState<AdminPool[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchErr, setFetchErr] = useState<string | null>(null);
+  const [selectedAddr, setSelectedAddr] = useState<string | null>(null);
 
-  function handlePausedChange(id: string, paused: boolean) {
-    setPoolState((pools) => pools.map((p) => p.id === id ? { ...p, paused } : p));
+  useEffect(() => {
+    setLoading(true);
+    fetch("/api/pools", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d: { pools: ApiPoolRow[] }) => {
+        const mapped = d.pools.map(apiPoolToAdminPool);
+        setPools(mapped);
+        if (mapped.length > 0) setSelectedAddr(mapped[0].pool_address);
+      })
+      .catch((e) => setFetchErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const selectedPool = pools.find((p) => p.pool_address === selectedAddr);
+
+  function handlePausedChange(addr: string, paused: boolean) {
+    setPools((prev) => prev.map((p) => p.pool_address === addr ? { ...p, paused } : p));
+  }
+
+  if (loading) {
+    return (
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center", color: "#6b7280", fontSize: 14 }}>
+        Loading pools…
+      </div>
+    );
+  }
+  if (fetchErr) {
+    return (
+      <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 14, padding: "24px", fontSize: 13, color: "#991b1b" }}>
+        Failed to load pools: {fetchErr}
+      </div>
+    );
+  }
+  if (pools.length === 0) {
+    return (
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#0b0b10", marginBottom: 6 }}>No pools yet</div>
+        <div style={{ fontSize: 13, color: "#6b7280", maxWidth: 460, margin: "0 auto" }}>
+          Use the <strong>Initialize Pool</strong> tab to create your first lending pool, then come back here to manage its parameters.
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -380,12 +479,12 @@ function PoolsView() {
       <div style={{ position: "sticky", top: 20 }}>
         <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#9ca3af", marginBottom: 8, paddingLeft: 4 }}>Pools</div>
         <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, overflow: "hidden" }}>
-          {poolState.map((p, i) => {
-            const isSelected = p.id === selectedId;
+          {pools.map((p, i) => {
+            const isSelected = p.pool_address === selectedAddr;
             return (
-              <div key={p.id} onClick={() => setSelectedId(p.id)}
+              <div key={p.pool_address} onClick={() => setSelectedAddr(p.pool_address)}
                 style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px",
-                  borderBottom: i < poolState.length - 1 ? "1px solid #f3f4f6" : "none",
+                  borderBottom: i < pools.length - 1 ? "1px solid #f3f4f6" : "none",
                   cursor: "pointer", background: isSelected ? "#fafbff" : "transparent",
                   borderLeft: isSelected ? "3px solid #6d28d9" : "3px solid transparent" }}>
                 <div style={{ width: 32, height: 32, borderRadius: 9, background: p.color, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 700, color: "white" }}>{p.icon}</div>
@@ -410,14 +509,18 @@ function PoolsView() {
         </div>
       </div>
       <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: selectedPool.color, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 700, color: "white" }}>{selectedPool.icon}</div>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#0b0b10" }}>{selectedPool.symbol}</div>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Pool administrator controls</div>
-          </div>
-        </div>
-        <PoolPanel key={selectedPool.id} pool={selectedPool} onPausedChange={handlePausedChange} />
+        {selectedPool && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: selectedPool.color, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 700, color: "white" }}>{selectedPool.icon}</div>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#0b0b10" }}>{selectedPool.symbol}</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>Pool administrator controls</div>
+              </div>
+            </div>
+            <PoolPanel key={selectedPool.pool_address} pool={selectedPool} onPausedChange={handlePausedChange} />
+          </>
+        )}
       </div>
     </div>
   );

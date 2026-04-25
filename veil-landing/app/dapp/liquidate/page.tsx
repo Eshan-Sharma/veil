@@ -6,14 +6,16 @@ import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton
 import { PublicKey } from "@solana/web3.js";
 import Link from "next/link";
 import { useVeilActions } from "../hooks/useVeilActions";
+import { usePools, type PoolView } from "@/lib/veil/usePools";
 
-const POOLS = [
-  { id: "sol",  symbol: "SOL",  icon: "◎", color: "#7c3aed" },
-  { id: "btc",  symbol: "BTC",  icon: "₿", color: "#f97316" },
-  { id: "eth",  symbol: "ETH",  icon: "Ξ", color: "#6366f1" },
-  { id: "xau",  symbol: "XAU",  icon: "◈", color: "#ca8a04" },
-  { id: "usdc", symbol: "USDC", icon: "$", color: "#2563eb" },
-];
+const SYMBOL_ICONS: Record<string, { icon: string; color: string }> = {
+  SOL:  { icon: "◎", color: "#7c3aed" },
+  BTC:  { icon: "₿", color: "#f97316" },
+  ETH:  { icon: "Ξ", color: "#6366f1" },
+  XAU:  { icon: "◈", color: "#ca8a04" },
+  USDC: { icon: "$", color: "#2563eb" },
+};
+const DEFAULT_ICON = { icon: "●", color: "#6b7280" };
 
 interface UnhealthyRow {
   position_address: string;
@@ -36,7 +38,8 @@ function fmtHF(raw: string): string {
 export default function LiquidatePage() {
   const { publicKey } = useWallet();
   const { liquidate, status, txSig, errorMsg, reset } = useVeilActions();
-  const [poolId, setPoolId] = useState("usdc");
+  const { pools, loading: poolsLoading } = usePools();
+  const [selectedIdx, setSelectedIdx] = useState(0);
   const [borrower, setBorrower] = useState("");
   const [borrowerErr, setBorrowerErr] = useState<string | null>(null);
 
@@ -61,15 +64,17 @@ export default function LiquidatePage() {
   useEffect(() => { void scanUnhealthy(); }, []);
 
   function handleSubmit() {
+    if (pools.length === 0) return;
     setBorrowerErr(null);
     let pk: PublicKey;
     try { pk = new PublicKey(borrower.trim()); }
     catch { setBorrowerErr("Invalid wallet pubkey"); return; }
-    void liquidate(poolId, pk);
+    void liquidate(pools[selectedIdx], pk);
   }
 
   const busy = ["building", "signing", "confirming"].includes(status);
-  const selected = POOLS.find((p) => p.id === poolId)!;
+  const selected = pools[selectedIdx];
+  const meta = selected ? (SYMBOL_ICONS[selected.symbol] ?? DEFAULT_ICON) : DEFAULT_ICON;
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -145,21 +150,28 @@ export default function LiquidatePage() {
         <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 16, padding: "20px 22px", marginBottom: 16 }}>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 8 }}>Market</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {POOLS.map((p) => {
-                const sel = p.id === poolId;
-                return (
-                  <button key={p.id} onClick={() => setPoolId(p.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 999,
-                      border: `1px solid ${sel ? p.color : "#e5e7eb"}`,
-                      background: sel ? `${p.color}1a` : "white",
-                      cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: sel ? p.color : "#374151" }}>
-                    <span style={{ width: 18, height: 18, borderRadius: 5, background: p.color, color: "white", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 700 }}>{p.icon}</span>
-                    {p.symbol}
-                  </button>
-                );
-              })}
-            </div>
+            {poolsLoading ? (
+              <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading pools…</div>
+            ) : pools.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#9ca3af" }}>No pools available</div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {pools.map((p, i) => {
+                  const sel = i === selectedIdx;
+                  const m = SYMBOL_ICONS[p.symbol] ?? DEFAULT_ICON;
+                  return (
+                    <button key={p.poolAddress.toBase58()} onClick={() => setSelectedIdx(i)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 999,
+                        border: `1px solid ${sel ? m.color : "#e5e7eb"}`,
+                        background: sel ? `${m.color}1a` : "white",
+                        cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: sel ? m.color : "#374151" }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 5, background: m.color, color: "white", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 700 }}>{m.icon}</span>
+                      {p.symbol}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: 14 }}>

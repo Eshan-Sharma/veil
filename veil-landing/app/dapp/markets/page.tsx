@@ -25,11 +25,11 @@ export default function MarketsPage() {
     if (!openModal || !amount.trim()) return;
     const a = BigInt(amount.trim().replace(/[^0-9]/g, "") || "0");
     if (a === 0n) return;
-    const id = openModal.pool.id;
-    if (openModal.kind === "deposit")  void actions.deposit(id, a);
-    if (openModal.kind === "withdraw") void actions.withdraw(id, a);
-    if (openModal.kind === "borrow")   void actions.borrow(id, a);
-    if (openModal.kind === "repay")    void actions.repay(id, a);
+    const pool = openModal.pool;
+    if (openModal.kind === "deposit")  void actions.deposit(pool, a);
+    if (openModal.kind === "withdraw") void actions.withdraw(pool, a);
+    if (openModal.kind === "borrow")   void actions.borrow(pool, a);
+    if (openModal.kind === "repay")    void actions.repay(pool, a);
   }
 
   return (
@@ -48,7 +48,6 @@ export default function MarketsPage() {
             <Link href="/dapp/positions" style={navLink}>POSITIONS</Link>
             <Link href="/dapp/history" style={navLink}>HISTORY</Link>
             <Link href="/dapp/liquidate" style={navLink}>LIQUIDATE</Link>
-            <Link href="/dapp/faucet" style={navLink}>FAUCET</Link>
             <WalletMultiButton style={btn} />
           </div>
         </div>
