@@ -36,7 +36,7 @@ const logo = (
   </span>
 )
 
-const navbar = <Navbar logo={logo} projectLink="https://github.com/Eshan-Sharma/veil" />
+const navbar = <Navbar logo={logo} logoLink={process.env.NEXT_PUBLIC_LANDING_URL ?? "https://veil-mocha-eight.vercel.app"} projectLink="https://github.com/Eshan-Sharma/veil" />
 
 const footer = (
   <Footer>
