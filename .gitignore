@@ -6,3 +6,5 @@ veil-landing/.next/
 veil-landing/node_modules/
 .DS_Store
 PRIVATE_ROADMAP.md
+.env
+veil-landing/.env.*
