@@ -18,6 +18,8 @@ import { useAdminRole } from "./hooks/useAdminRole";
 import { InitPoolPanel } from "./components/InitPoolPanel";
 import { AllowlistPanel } from "./components/AllowlistPanel";
 import { AuditLogPanel } from "./components/AuditLogPanel";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 
 // ─── Symbol → icon / color mapping ───────────────────────────────────────────
 
@@ -166,12 +168,14 @@ function SectionHead({ label }: { label: string }) {
 }
 
 function TxBanner({ status, sig, error, onReset }: { status: TxStatus; sig?: string; error?: string; onReset: () => void }) {
+  const rpc = useSolanaRpc();
   if (status === "idle") return null;
   const pending = ["building", "signing", "confirming"].includes(status);
   const label = status === "building" ? "Building transaction…" : status === "signing" ? "Approve in wallet…" : status === "confirming" ? "Confirming on-chain…" : status === "success" ? "Transaction confirmed" : "Transaction failed";
   const bg = status === "success" ? "#f0fdf4" : status === "error" ? "#fef2f2" : "#eff6ff";
   const border = status === "success" ? "#bbf7d0" : status === "error" ? "#fecaca" : "#bfdbfe";
-  const color = status === "success" ? "#166534" : status === "error" ? "#991b1b" : "#1e40af";
+  const color = status === "success" ? "#166534" : status === "error" ? "#991b1b" : "#1e40af"
+
   return (
     <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
       {pending && (
@@ -181,7 +185,7 @@ function TxBanner({ status, sig, error, onReset }: { status: TxStatus; sig?: str
       )}
       <span style={{ fontSize: 12.5, fontWeight: 500, color, flex: 1 }}>{label}{status === "error" && error && ` — ${error}`}</span>
       {status === "success" && sig && (
-        <a href={`https://explorer.solana.com/tx/${sig}?cluster=devnet`} target="_blank" rel="noreferrer"
+        <a href={buildExplorerTxUrl(sig, rpc)} target="_blank" rel="noreferrer"
           style={{ fontSize: 11, color: "#059669", fontWeight: 600, textDecoration: "none", fontFamily: "var(--font-mono),monospace", flexShrink: 0 }}>
           {sig.slice(0, 8)}…{sig.slice(-6)} ↗
         </a>
@@ -321,7 +325,7 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
 
   const pausing = ["building", "signing", "confirming"].includes(pauseStatus);
   const updating = ["building", "signing", "confirming"].includes(updateStatus);
-  const collecting = ["building", "signing", "confirming"].includes(feesStatus);
+  const collecting = ["building", "signing", "confirming"].includes(feesStatus)
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -449,22 +453,20 @@ function PoolsView() {
     setPools((prev) => prev.map((p) => p.pool_address === addr ? { ...p, paused } : p));
   }
 
-  if (loading) {
-    return (
+  if (loading)
+  return (
       <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center", color: "#6b7280", fontSize: 14 }}>
         Loading pools…
       </div>
     );
-  }
-  if (fetchErr) {
-    return (
+  if (fetchErr)
+  return (
       <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 14, padding: "24px", fontSize: 13, color: "#991b1b" }}>
         Failed to load pools: {fetchErr}
       </div>
     );
-  }
-  if (pools.length === 0) {
-    return (
+  if (pools.length === 0)
+  return (
       <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#0b0b10", marginBottom: 6 }}>No pools yet</div>
         <div style={{ fontSize: 13, color: "#6b7280", maxWidth: 460, margin: "0 auto" }}>
@@ -472,7 +474,6 @@ function PoolsView() {
         </div>
       </div>
     );
-  }
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "start" }}>
@@ -481,6 +482,7 @@ function PoolsView() {
         <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, overflow: "hidden" }}>
           {pools.map((p, i) => {
             const isSelected = p.pool_address === selectedAddr;
+
             return (
               <div key={p.pool_address} onClick={() => setSelectedAddr(p.pool_address)}
                 style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px",
@@ -534,12 +536,14 @@ function TabBar({ tab, setTab, isSuperAdmin }: { tab: Tab; setTab: (t: Tab) => v
     { id: "init", label: "Initialize Pool", visible: true },
     { id: "allowlist", label: "Allowlist", visible: isSuperAdmin },
     { id: "audit", label: "Audit Log", visible: true },
-  ];
+  ]
+
   return (
     <div style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid #e5e7eb" }}>
       {tabs.filter((t) => t.visible).map((t) => {
-        const active = t.id === tab;
-        return (
+        const active = t.id === tab
+
+  return (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{ padding: "10px 16px", fontSize: 13, fontWeight: 600,
               color: active ? "#0b0b10" : "#6b7280",
@@ -567,7 +571,7 @@ export default function AdminPage() {
   // Allowlist tab is super-admin only — switch back if user loses privilege
   useEffect(() => {
     if (tab === "allowlist" && !isSuperAdmin) setTab("pools");
-  }, [tab, isSuperAdmin]);
+  }, [tab, isSuperAdmin])
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa", display: "flex", flexDirection: "column" }}>

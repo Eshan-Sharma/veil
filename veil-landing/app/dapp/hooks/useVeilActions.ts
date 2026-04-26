@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import {
   depositIx,
   withdrawIx,
@@ -30,17 +31,18 @@ function logTx(p: { signature: string; wallet: string; action: string; pool_addr
 }
 
 /** Fire-and-forget pool sync after a state-changing tx. */
-function syncPool(poolAddress: string) {
+function syncPool(poolAddress: string, rpc: string) {
   void fetch("/api/pools/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pool_address: poolAddress }),
+    body: JSON.stringify({ pool_address: poolAddress, rpc }),
   }).catch(() => {});
 }
 
 export function useVeilActions() {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
+  const { endpoint } = useSolanaRpc();
   const [status, setStatus] = useState<TxStatus>("idle");
   const [txSig, setTxSig] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -69,7 +71,7 @@ export function useVeilActions() {
       setTxSig(sig);
       logTx({ signature: sig, wallet: publicKey.toBase58(), action: meta.action,
               pool_address: meta.poolAddress, amount: meta.amount, status: "confirmed" });
-      syncPool(meta.poolAddress);
+      syncPool(meta.poolAddress, endpoint);
     } catch (e: unknown) {
       setStatus("error");
       setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
@@ -87,7 +89,7 @@ export function useVeilActions() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
 
   const withdraw = useCallback(
@@ -102,7 +104,7 @@ export function useVeilActions() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
 
   const borrow = useCallback(
@@ -117,7 +119,7 @@ export function useVeilActions() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
 
   const repay = useCallback(
@@ -131,7 +133,7 @@ export function useVeilActions() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
 
   const liquidate = useCallback(
@@ -146,7 +148,7 @@ export function useVeilActions() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
 
   const flashExecute = useCallback(
@@ -170,15 +172,14 @@ export function useVeilActions() {
         setTxSig(sig);
         logTx({ signature: sig, wallet: publicKey.toBase58(), action: "flash",
                 pool_address: pool.poolAddress.toBase58(), amount, status: "confirmed" });
-        syncPool(pool.poolAddress.toBase58());
+        syncPool(pool.poolAddress.toBase58(), endpoint);
       } catch (e: unknown) {
         setStatus("error");
         setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, sendTransaction]
+    [publicKey, connection, endpoint, sendTransaction]
   );
-
   return { deposit, withdraw, borrow, repay, liquidate, flashExecute, status, txSig, errorMsg, reset };
 }

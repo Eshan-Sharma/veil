@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { buildInitializePoolTx } from "@/lib/veil/initialize";
 import { requestSignedAuth } from "@/lib/auth/client";
 
@@ -12,6 +14,7 @@ export function InitPoolPanel() {
   const { publicKey, sendTransaction } = useWallet();
   const wallet = useWallet();
   const { connection } = useConnection();
+  const rpc = useSolanaRpc();
 
   const [tokenMint, setTokenMint] = useState("");
   const [symbol, setSymbol] = useState("");
@@ -89,7 +92,7 @@ export function InitPoolPanel() {
     }
   }
 
-  const busy = ["building", "signing", "confirming", "registering"].includes(status);
+  const busy = ["building", "signing", "confirming", "registering"].includes(status)
 
   return (
     <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 16, padding: "20px 22px", maxWidth: 640 }}>
@@ -145,7 +148,7 @@ export function InitPoolPanel() {
             Pool: {poolAddr}
           </div>
           {sig && (
-            <a href={`https://explorer.solana.com/tx/${sig}?cluster=devnet`} target="_blank" rel="noreferrer"
+            <a href={buildExplorerTxUrl(sig, rpc)} target="_blank" rel="noreferrer"
                style={{ color: "#059669", fontSize: 11, fontFamily: "var(--font-mono),monospace" }}>
               tx {sig.slice(0, 10)}…{sig.slice(-6)} ↗
             </a>
