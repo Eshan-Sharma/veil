@@ -42,7 +42,6 @@ const steps = [
 ];
 
 export const HowItWorks = () => {
-
   return (
     <section id="how" className="relative mx-auto max-w-7xl px-6 py-28 sm:py-36">
       <div className="max-w-3xl">

@@ -3,7 +3,7 @@ export const Footer = () => {
     process.env.NEXT_PUBLIC_DOCS_URL ??
     (process.env.NODE_ENV === "development"
       ? "http://localhost:3001"
-      : "https://docsveil.vercel.app");
+      : "https://docsveil.vercel.app")
 
   return (
     <footer className="relative border-t border-zinc-200/80 bg-white/50 backdrop-blur">

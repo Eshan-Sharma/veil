@@ -49,7 +49,7 @@ export default function PositionsPage() {
       .then((d: { positions: PositionRow[] }) => setRows(d.positions ?? []))
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [publicKey]);
+  }, [publicKey])
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -92,6 +92,7 @@ export default function PositionsPage() {
             {rows.map((r) => {
               const hf = formatHF(r.health_factor_wad);
               const toneCol = hf.tone === "err" ? "#dc2626" : hf.tone === "warn" ? "#d97706" : hf.tone === "ok" ? "#059669" : "#9ca3af";
+
               return (
                 <div key={r.position_address} style={tableRow}>
                   <span style={{ fontFamily: "var(--font-mono),monospace", fontSize: 11.5, color: "#374151" }}>

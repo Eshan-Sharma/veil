@@ -30,7 +30,6 @@ const links = [
 ];
 
 export const Nav = () => {
-
   return (
     <header className="sticky top-0 z-40 w-full">
       <div className="mx-auto mt-3 max-w-7xl px-4">

@@ -20,8 +20,9 @@ export function WalletButton({ style }: { style?: CSSProperties }) {
   useEffect(() => setMounted(true), []);
 
   if (!mounted) {
-    // Match the typical button footprint so layout doesn't shift.
-    return (
+    // Match the typical button footprint so layout doesn't shift
+
+  return (
       <div
         aria-hidden
         style={{

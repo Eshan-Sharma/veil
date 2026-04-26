@@ -19,7 +19,7 @@ export const PrivacyDemo = () => {
         </span>
       </div>
     </div>
-  );
+  )
 
   return (
     <section id="privacy" className="relative overflow-hidden">

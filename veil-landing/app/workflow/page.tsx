@@ -63,7 +63,8 @@ function StepRow({ n, title, who, children }: { n: number; title: string; who: s
   const colorMap: Record<string, string> = {
     User: palette.user, Admin: palette.admin, "Super-admin": palette.super, Liquidator: palette.liq, Server: palette.ok, Chain: palette.ink,
   };
-  const c = colorMap[who] ?? palette.mute;
+  const c = colorMap[who] ?? palette.mute
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "32px 1fr", gap: 14, marginBottom: 14 }}>
       <div style={{ width: 28, height: 28, borderRadius: 999, background: `${c}1a`, color: c, display: "grid", placeItems: "center", fontSize: 13, fontWeight: 700 }}>
