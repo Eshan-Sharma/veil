@@ -38,6 +38,50 @@ pub struct Deposit {
     pub position_bump: u8,
 }
 
+#[inline(always)]
+fn validate_new_position_pda(
+    program_id: &Address,
+    pool_addr: &Address,
+    user_addr: &Address,
+    position_addr: &Address,
+    position_bump: u8,
+) -> Result<(), ProgramError> {
+    let derived = Address::derive_address(
+        &[b"position", pool_addr.as_ref(), user_addr.as_ref()],
+        Some(position_bump),
+        program_id,
+    );
+    if derived != *position_addr {
+        return Err(LendError::InvalidPda.into());
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn validate_existing_position(
+    pos: &UserPosition,
+    user_addr: &Address,
+    pool_addr: &Address,
+) -> Result<(), ProgramError> {
+    pos.verify_binding(user_addr, pool_addr)
+}
+
+#[inline(always)]
+fn compute_deposit_shares(amount: u64, supply_index: u128) -> Result<u64, ProgramError> {
+    math::deposit_to_shares(amount, supply_index)
+}
+
+#[inline(always)]
+fn apply_deposit_to_position(pos: &mut UserPosition, shares: u64, supply_index: u128) {
+    pos.deposit_shares = pos.deposit_shares.saturating_add(shares);
+    pos.deposit_index_snapshot = supply_index;
+}
+
+#[inline(always)]
+fn apply_deposit_to_pool(pool: &mut LendingPool, amount: u64) {
+    pool.total_deposits = pool.total_deposits.saturating_add(amount);
+}
+
 impl Deposit {
     pub const DISCRIMINATOR: u8 = 1;
 
@@ -78,14 +122,13 @@ impl Deposit {
         let user_addr = *accounts[0].address();
 
         if accounts[4].lamports() == 0 {
-            let derived = Address::derive_address(
-                &[b"position", pool_addr.as_ref(), user_addr.as_ref()],
-                Some(self.position_bump),
+            validate_new_position_pda(
                 program_id,
-            );
-            if derived != *accounts[4].address() {
-                return Err(LendError::InvalidPda.into());
-            }
+                &pool_addr,
+                &user_addr,
+                accounts[4].address(),
+                self.position_bump,
+            )?;
 
             let rent = Rent::get()?;
             let lamports = rent.try_minimum_balance(UserPosition::SIZE)?;
@@ -123,12 +166,12 @@ impl Deposit {
             )?;
         } else {
             let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(&user_addr, &pool_addr)?;
+            validate_existing_position(pos, &user_addr, &pool_addr)?;
         }
 
         // ── Compute shares ────────────────────────────────────────────────
         let supply_index = LendingPool::from_account(&accounts[3])?.supply_index;
-        let shares = math::deposit_to_shares(self.amount, supply_index)?;
+        let shares = compute_deposit_shares(self.amount, supply_index)?;
 
         // ── Token transfer: user → vault ──────────────────────────────────
         Transfer::new(&accounts[1], &accounts[2], &accounts[0], self.amount).invoke()?;
@@ -136,14 +179,74 @@ impl Deposit {
         // ── Update state ──────────────────────────────────────────────────
         {
             let pos = UserPosition::from_account_mut(&accounts[4])?;
-            pos.deposit_shares = pos.deposit_shares.saturating_add(shares);
-            pos.deposit_index_snapshot = supply_index;
+            apply_deposit_to_position(pos, shares, supply_index);
         }
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
-            pool.total_deposits = pool.total_deposits.saturating_add(self.amount);
+            apply_deposit_to_pool(pool, self.amount);
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::WAD;
+
+    fn position() -> UserPosition {
+        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
+        pos.discriminator = UserPosition::DISCRIMINATOR;
+        pos.owner = Address::new_from_array([1u8; 32]);
+        pos.pool = Address::new_from_array([2u8; 32]);
+        pos
+    }
+
+    #[test]
+    fn deposit_validate_new_position_pda_rejects_wrong_address() {
+        assert_eq!(
+            validate_new_position_pda(
+                &Address::new_from_array([9u8; 32]),
+                &Address::new_from_array([2u8; 32]),
+                &Address::new_from_array([1u8; 32]),
+                &Address::new_from_array([3u8; 32]),
+                7,
+            ),
+            Err(LendError::InvalidPda.into())
+        );
+    }
+
+    #[test]
+    fn deposit_validate_existing_position_checks_binding() {
+        let pos = position();
+        assert_eq!(
+            validate_existing_position(&pos, &Address::new_from_array([1u8; 32]), &Address::new_from_array([2u8; 32])),
+            Ok(())
+        );
+        assert_eq!(
+            validate_existing_position(&pos, &Address::new_from_array([8u8; 32]), &Address::new_from_array([2u8; 32])),
+            Err(LendError::Unauthorized.into())
+        );
+    }
+
+    #[test]
+    fn deposit_compute_shares_matches_math() {
+        assert_eq!(compute_deposit_shares(1_100, WAD + WAD / 10), Ok(1_000));
+    }
+
+    #[test]
+    fn deposit_apply_position_updates_shares_and_snapshot() {
+        let mut pos = position();
+        apply_deposit_to_position(&mut pos, 500, 123);
+        assert_eq!(pos.deposit_shares, 500);
+        assert_eq!(pos.deposit_index_snapshot, 123);
+    }
+
+    #[test]
+    fn deposit_apply_pool_updates_total_deposits() {
+        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
+        apply_deposit_to_pool(&mut pool, 700);
+        assert_eq!(pool.total_deposits, 700);
     }
 }
