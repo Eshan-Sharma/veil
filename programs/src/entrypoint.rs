@@ -2,9 +2,10 @@ use pinocchio::{
     account::AccountView,
     entrypoint,
     error::ProgramError,
-    nostd_panic_handler,
     Address, ProgramResult,
 };
+#[cfg(not(test))]
+use pinocchio::nostd_panic_handler;
 
 use crate::instructions::{
     Borrow, CollectFees, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister,
