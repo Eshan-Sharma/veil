@@ -9,3 +9,4 @@ veil-landing/node_modules/
 PRIVATE_ROADMAP.md
 .env
 veil-landing/.env.*
+!veil-landing/.env.example
