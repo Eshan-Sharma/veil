@@ -15,14 +15,14 @@ import {
 } from "./pda";
 import { initializePoolIx } from "./instructions";
 
-export interface BuiltInitTx {
+export type BuiltInitTx = {
   tx: Transaction;
   pool: PublicKey;
   poolAuthority: PublicKey;
   vault: PublicKey;
   poolBump: number;
   authorityBump: number;
-}
+};
 
 /**
  * Build a Transaction that:

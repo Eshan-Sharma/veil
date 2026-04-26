@@ -332,7 +332,7 @@ export function flashRepayIx(
 // All rate / ratio fields are WAD-scaled (1e18 = 100%).
 // flash_fee_bps is raw basis points (not WAD).
 
-export interface UpdatePoolParams {
+export type UpdatePoolParams = {
   baseRate: bigint;
   optimalUtilization: bigint;
   slope1: bigint;
@@ -344,7 +344,7 @@ export interface UpdatePoolParams {
   protocolLiqFee: bigint;
   closeFactor: bigint;
   flashFeeBps: bigint;
-}
+};
 
 export function updatePoolIx(
   authority: PublicKey,

@@ -16,6 +16,7 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
  */
 export function WalletButton({ style }: { style?: CSSProperties }) {
   const [mounted, setMounted] = useState(false);
+
   useEffect(() => setMounted(true), []);
 
   if (!mounted) {

@@ -1,4 +1,5 @@
-export default function CTA() {
+export const CTA = () => {
+
   return (
     <section className="relative">
       <div className="mx-auto max-w-7xl px-6 pb-24 sm:pb-32">

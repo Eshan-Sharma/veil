@@ -1,4 +1,5 @@
-export default function Footer() {
+export const Footer = () => {
+
   return (
     <footer className="relative border-t border-zinc-200/80 bg-white/50 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-col gap-10 px-6 py-14 md:flex-row md:items-start md:justify-between">

@@ -1,6 +1,7 @@
-import PositionCard from "./PositionCard";
+import { PositionCard } from "./PositionCard";
 
-export default function Hero() {
+export const Hero = () => {
+
   return (
     <section className="relative overflow-hidden">
       <div aria-hidden className="pointer-events-none absolute inset-0 grid-bg" />

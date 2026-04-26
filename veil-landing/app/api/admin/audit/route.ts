@@ -3,14 +3,14 @@ import { sql } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-interface AuditRow {
+type AuditRow = {
   id: number;
   actor: string;
   action: string;
   target: string | null;
   details: unknown;
   created_at: string;
-}
+};
 
 /** Public read of the admin audit log. Rows are not sensitive — actors and
  *  actions are recorded for transparency. Filterable by actor/action. */

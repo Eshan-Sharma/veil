@@ -17,10 +17,10 @@ const FEED_IDS: Record<string, string> = {
 
 const HERMES = "https://hermes.pyth.network/v2/updates/price/latest";
 
-interface HermesEntry {
+type HermesEntry = {
   id: string;
   price: { price: string; expo: number };
-}
+};
 
 export async function fetchPythPrices(): Promise<PythPrices> {
   const params = Object.values(FEED_IDS)

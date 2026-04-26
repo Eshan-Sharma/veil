@@ -5,13 +5,13 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { requestSignedAuth } from "@/lib/auth/client";
 
-interface AdminEntry {
+type AdminEntry = {
   pubkey: string;
   role: "super_admin" | "pool_admin";
   label: string | null;
   added_by: string | null;
   created_at: string;
-}
+};
 
 export function AllowlistPanel() {
   const wallet = useWallet();

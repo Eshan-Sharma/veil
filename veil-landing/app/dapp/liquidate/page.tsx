@@ -17,14 +17,14 @@ const SYMBOL_ICONS: Record<string, { icon: string; color: string }> = {
 };
 const DEFAULT_ICON = { icon: "●", color: "#6b7280" };
 
-interface UnhealthyRow {
+type UnhealthyRow = {
   position_address: string;
   pool_address: string;
   owner: string;
   borrow_principal: string;
   health_factor_wad: string;
   last_synced_at: string;
-}
+};
 
 const WAD = 1_000_000_000_000_000_000n;
 function fmtHF(raw: string): string {

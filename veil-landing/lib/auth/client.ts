@@ -3,11 +3,11 @@
 import bs58 from "bs58";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 
-export interface SignedAuth {
+export type SignedAuth = {
   actor: string;
   nonce: string;
   signature: string;
-}
+};
 
 /**
  * Request a single-use server-issued nonce, ask the connected wallet to sign it,

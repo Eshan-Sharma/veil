@@ -2,7 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { POOL_SIZE, POSITION_SIZE } from "./constants";
 
 /** Mirrors the on-chain LendingPool struct (352 bytes, little-endian). */
-export interface LendingPool {
+export type LendingPool = {
   discriminator: Uint8Array; // [0..8]
   authority: PublicKey;       // [8..40]
   tokenMint: PublicKey;       // [40..72]
@@ -29,10 +29,10 @@ export interface LendingPool {
   closeFactor: bigint;        // [320..336] u128
   flashLoanAmount: bigint;    // [336..344]
   flashFeeBps: bigint;        // [344..352]
-}
+};
 
 /** Mirrors the on-chain UserPosition struct (144 bytes, little-endian). */
-export interface UserPosition {
+export type UserPosition = {
   discriminator: Uint8Array;       // [0..8]
   owner: PublicKey;                // [8..40]
   pool: PublicKey;                 // [40..72]
@@ -43,7 +43,7 @@ export interface UserPosition {
   borrowIndexSnapshot: bigint;     // [112..128] u128
   bump: number;                    // [128]
   // _pad_end [129..144]
-}
+};
 
 function readU64LE(buf: Buffer, offset: number): bigint {
   return buf.readBigUInt64LE(offset);

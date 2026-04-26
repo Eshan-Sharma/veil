@@ -13,10 +13,12 @@ const cipherPool = [
 
 function useCipher(seed = 0) {
   const [i, setI] = useState(seed);
+
   useEffect(() => {
     const t = setInterval(() => setI((p) => (p + 1) % cipherPool.length), 2400 + seed * 220);
     return () => clearInterval(t);
   }, [seed]);
+
   return cipherPool[i];
 }
 
@@ -52,7 +54,7 @@ const goldRows = [
   { tag: "ORO", k: "gold custody verified", ref: "oro::xau/vault/7", t: "12s", tone: "amber" },
 ];
 
-export default function PositionCard() {
+export const PositionCard = () => {
   const [vault, setVault] = useState<"btc" | "gold">("btc");
   const isBtc = vault === "btc";
 

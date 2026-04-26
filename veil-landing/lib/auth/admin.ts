@@ -1,11 +1,11 @@
 import { sql, type AdminRole } from "@/lib/db";
 import { buildAuthMessage, verifyEd25519Signature } from "./signature";
 
-export interface AdminAuthResult {
+export type AdminAuthResult = {
   ok: boolean;
   role?: AdminRole;
   error?: string;
-}
+};
 
 /**
  * Verify an authenticated admin request:

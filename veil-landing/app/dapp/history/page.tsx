@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 
-interface TxRow {
+type TxRow = {
   id: number;
   signature: string;
   pool_address: string | null;
@@ -15,7 +15,7 @@ interface TxRow {
   status: "pending" | "confirmed" | "failed";
   error_msg: string | null;
   created_at: string;
-}
+};
 
 const ACTION_COLOR: Record<string, string> = {
   deposit:  "#059669",

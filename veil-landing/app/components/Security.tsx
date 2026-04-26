@@ -21,7 +21,8 @@ const pillars = [
   },
 ];
 
-export default function Security() {
+export const Security = () => {
+
   return (
     <section className="relative">
       <div className="mx-auto max-w-7xl px-6 py-28 sm:py-36">

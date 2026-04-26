@@ -4,7 +4,7 @@ import { sql } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-interface Check { ok: boolean; ms: number; detail?: string; }
+type Check = { ok: boolean; ms: number; detail?: string };
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number; detail?: string; result?: T }> {
   const start = Date.now();

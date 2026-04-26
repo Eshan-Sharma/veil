@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export default function PrivacyDemo() {
+export const PrivacyDemo = () => {
   const [veil, setVeil] = useState(true);
 
   const row = (label: string, value: string, ct: string) => (
