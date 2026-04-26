@@ -1,4 +1,4 @@
-export default function Pinocchio() {
+export const Pinocchio = () => {
   const rows = [
     { op: "borrow", anchor: 38400, pinocchio: 12100 },
     { op: "repay", anchor: 29800, pinocchio: 9400 },

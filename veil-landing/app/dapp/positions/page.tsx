@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 
-interface PositionRow {
+type PositionRow = {
   position_address: string;
   pool_address: string;
   owner: string;
@@ -13,7 +13,7 @@ interface PositionRow {
   borrow_principal: string;
   health_factor_wad: string | null;
   last_synced_at: string;
-}
+};
 
 const WAD = 1_000_000_000_000_000_000n;
 

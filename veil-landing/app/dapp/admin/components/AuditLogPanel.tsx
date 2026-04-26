@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from "react";
 
-interface AuditEntry {
+type AuditEntry = {
   id: number;
   actor: string;
   action: string;
   target: string | null;
   details: unknown;
   created_at: string;
-}
+};
 
 const ACTION_TONE: Record<string, { fg: string; bg: string }> = {
   add_admin:    { fg: "#065f46", bg: "#d1fae5" },

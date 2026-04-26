@@ -41,7 +41,7 @@ const fMono  = "ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Menlo', 'Consol
 
 // ─── TOC structure ──────────────────────────────────────────────────────────
 
-interface TocItem { id: string; n: string; title: string; }
+type TocItem = { id: string; n: string; title: string };
 const TOC: TocItem[] = [
   { id: "abstract",            n: "00", title: "Abstract" },
   { id: "introduction",        n: "01", title: "Introduction" },
@@ -68,6 +68,7 @@ const TOC: TocItem[] = [
 
 function useReadingProgress(): number {
   const [pct, setPct] = useState(0);
+
   useEffect(() => {
     const onScroll = () => {
       const h = document.documentElement;
@@ -79,12 +80,14 @@ function useReadingProgress(): number {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
   return pct;
 }
 
 function useActiveSection(ids: string[]): string {
   const [active, setActive] = useState(ids[0]);
   const lock = useRef(false);
+
   useEffect(() => {
     const els = ids.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[];
     const io = new IntersectionObserver((entries) => {
@@ -97,6 +100,7 @@ function useActiveSection(ids: string[]): string {
     els.forEach((e) => io.observe(e));
     return () => io.disconnect();
   }, [ids]);
+
   return active;
 }
 
@@ -304,7 +308,7 @@ function Pill({ tone, children }: { tone: "ok" | "warn" | "err" | "info" | "neut
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
-export default function WhitepaperShell() {
+export const WhitepaperShell = () => {
   const pct = useReadingProgress();
   const active = useActiveSection(TOC.map((x) => x.id));
 

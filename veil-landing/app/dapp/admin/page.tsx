@@ -55,7 +55,7 @@ function wadToPercent(wad: string | null): string {
 
 // ─── Pool types ──────────────────────────────────────────────────────────────
 
-interface AdminPool {
+type AdminPool = {
   pool_address: string;
   token_mint: string;
   symbol: string;
@@ -68,9 +68,9 @@ interface AdminPool {
   accumulatedFees: string;
   paused: boolean;
   defaults: FormState;
-}
+};
 
-interface FormState {
+type FormState = {
   ltv: string;
   liqThreshold: string;
   liqBonus: string;
@@ -82,9 +82,9 @@ interface FormState {
   slope1: string;
   slope2: string;
   flashFeeBps: string;
-}
+};
 
-interface ApiPoolRow {
+type ApiPoolRow = {
   pool_address: string;
   token_mint: string;
   symbol: string | null;
@@ -105,7 +105,7 @@ interface ApiPoolRow {
   slope1_wad: string | null;
   slope2_wad: string | null;
   flash_fee_bps: number | null;
-}
+};
 
 function apiPoolToAdminPool(row: ApiPoolRow): AdminPool {
   const sym = (row.symbol ?? row.token_mint.slice(0, 4)).toUpperCase();

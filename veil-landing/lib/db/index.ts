@@ -9,16 +9,16 @@ export const sql = neon(process.env.DATABASE_URL ?? "");
 
 export type AdminRole = "super_admin" | "pool_admin";
 
-export interface AdminRow {
+export type AdminRow = {
   pubkey: string;
   role: AdminRole;
   label: string | null;
   added_by: string | null;
   created_at: string;
   revoked_at: string | null;
-}
+};
 
-export interface PoolRow {
+export type PoolRow = {
   pool_address: string;
   token_mint: string;
   symbol: string | null;
@@ -50,9 +50,9 @@ export interface PoolRow {
   init_signature: string | null;
   last_synced_at: string;
   created_at: string;
-}
+};
 
-export interface PositionRow {
+export type PositionRow = {
   position_address: string;
   pool_address: string;
   owner: string;
@@ -62,9 +62,9 @@ export interface PositionRow {
   borrow_idx_snap: string | null;
   health_factor_wad: string | null;
   last_synced_at: string;
-}
+};
 
-export interface TxLogRow {
+export type TxLogRow = {
   id: number;
   signature: string;
   pool_address: string | null;
@@ -74,4 +74,4 @@ export interface TxLogRow {
   status: "pending" | "confirmed" | "failed";
   error_msg: string | null;
   created_at: string;
-}
+};

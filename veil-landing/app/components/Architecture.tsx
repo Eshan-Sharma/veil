@@ -85,7 +85,7 @@ const layers = [
   },
 ];
 
-export default function Architecture() {
+export const Architecture = () => {
   return (
     <section id="architecture" className="relative overflow-hidden">
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-violet-100/40 to-transparent" />
@@ -302,6 +302,7 @@ export default function Architecture() {
 }
 
 function Dot() {
+
   return (
     <span className="grid h-4 w-4 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
       <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l2.5 2.5L10 3"/></svg>

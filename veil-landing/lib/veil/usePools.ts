@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 
-export interface ApiPool {
+export type ApiPool = {
   pool_address: string;
   token_mint: string;
   symbol: string | null;
@@ -33,9 +33,9 @@ export interface ApiPool {
   pyth_price_feed: string | null;
   last_synced_at: string;
   created_at: string;
-}
+};
 
-export interface PoolView {
+export type PoolView = {
   /** Stable id used in URLs / pool ops. Falls back to mint when no symbol. */
   id: string;
   symbol: string;
@@ -59,7 +59,7 @@ export interface PoolView {
   slope2Wad: bigint | null;
   flashFeeBps: number | null;
   source: "api" | "fallback";
-}
+};
 
 const FALLBACK_POOLS: PoolView[] = []; // empty by default — surface real pools only
 

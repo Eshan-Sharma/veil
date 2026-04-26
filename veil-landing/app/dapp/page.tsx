@@ -15,7 +15,7 @@ type View = "markets" | "portfolio" | "flash";
 type PoolType = "native" | "ika" | "oro" | "enc";
 type ModalType = "supply" | "borrow" | "withdraw" | "repay" | "ika-setup";
 
-interface PositionRow {
+type PositionRow = {
   position_address: string;
   pool_address: string;
   owner: string;
@@ -23,19 +23,19 @@ interface PositionRow {
   borrow_principal: string;
   health_factor_wad: string | null;
   last_synced_at: string;
-}
+};
 
-interface ModalState {
+type ModalState = {
   type: ModalType;
   pool: PoolView;
-}
+};
 
-interface ApiEndpoint {
+type ApiEndpoint = {
   method: string;
   path: string;
   desc: string;
   params: { n: string; t: string; d: string }[];
-}
+};
 
 // ─── WAD helpers ──────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import WhitepaperShell from "./WhitepaperShell";
+import { WhitepaperShell } from "./WhitepaperShell";
 
 export const metadata: Metadata = {
   title: "Whitepaper",
