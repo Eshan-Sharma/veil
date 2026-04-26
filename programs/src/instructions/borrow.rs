@@ -35,6 +35,61 @@ pub struct Borrow {
     pub amount: u64,
 }
 
+#[inline(always)]
+fn validate_borrow(
+    pool: &LendingPool,
+    pos: &UserPosition,
+    amount: u64,
+) -> Result<(u64, u8), ProgramError> {
+    if pool.paused != 0 {
+        return Err(LendError::PoolPaused.into());
+    }
+
+    let deposit_balance = math::current_deposit_balance(pos.deposit_shares, pool.supply_index)?;
+    let existing_debt = math::current_borrow_balance(
+        pos.borrow_principal,
+        pool.borrow_index,
+        pos.borrow_index_snapshot,
+    )?;
+
+    let max_borrow = math::max_borrowable(deposit_balance, pool.ltv)?;
+    let debt_after = existing_debt.saturating_add(amount);
+    if debt_after > max_borrow {
+        return Err(LendError::ExceedsCollateralFactor.into());
+    }
+
+    let hf = math::health_factor(deposit_balance, debt_after, pool.liquidation_threshold)?;
+    if hf < math::WAD {
+        return Err(LendError::Undercollateralised.into());
+    }
+
+    let available = pool
+        .total_deposits
+        .saturating_sub(pool.total_borrows)
+        .saturating_sub(pool.accumulated_fees);
+    if amount > available {
+        return Err(LendError::InsufficientLiquidity.into());
+    }
+
+    Ok((existing_debt, pool.authority_bump))
+}
+
+#[inline(always)]
+fn apply_borrow_to_position(
+    pos: &mut UserPosition,
+    existing_debt: u64,
+    amount: u64,
+    borrow_index: u128,
+) {
+    pos.borrow_principal = existing_debt.saturating_add(amount);
+    pos.borrow_index_snapshot = borrow_index;
+}
+
+#[inline(always)]
+fn apply_borrow_to_pool(pool: &mut LendingPool, amount: u64) {
+    pool.total_borrows = pool.total_borrows.saturating_add(amount);
+}
+
 impl Borrow {
     pub const DISCRIMINATOR: u8 = 3;
 
@@ -69,42 +124,11 @@ impl Borrow {
         }
 
         // ── Risk checks ───────────────────────────────────────────────────
-        let authority_bump = {
+        let (existing_debt, authority_bump) = {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
             pos.verify_binding(accounts[0].address(), accounts[3].address())?;
-
-            let deposit_balance =
-                math::current_deposit_balance(pos.deposit_shares, pool.supply_index)?;
-            let existing_debt = math::current_borrow_balance(
-                pos.borrow_principal,
-                pool.borrow_index,
-                pos.borrow_index_snapshot,
-            )?;
-
-            // LTV cap.
-            let max_borrow = math::max_borrowable(deposit_balance, pool.ltv)?;
-            let debt_after = existing_debt.saturating_add(self.amount);
-            if debt_after > max_borrow {
-                return Err(LendError::ExceedsCollateralFactor.into());
-            }
-
-            // HF after borrow.
-            let hf = math::health_factor(deposit_balance, debt_after, pool.liquidation_threshold)?;
-            if hf < math::WAD {
-                return Err(LendError::Undercollateralised.into());
-            }
-
-            // Vault liquidity.
-            let available = pool
-                .total_deposits
-                .saturating_sub(pool.total_borrows)
-                .saturating_sub(pool.accumulated_fees);
-            if self.amount > available {
-                return Err(LendError::InsufficientLiquidity.into());
-            }
-
-            pool.authority_bump
+            validate_borrow(pool, pos, self.amount)?
         };
 
         // ── Token transfer: vault → user ──────────────────────────────────
@@ -121,28 +145,109 @@ impl Borrow {
             .invoke_signed(&[signer])?;
 
         // ── Update state ──────────────────────────────────────────────────
-        let (borrow_index, existing_debt) = {
+        let borrow_index = {
             let pool = LendingPool::from_account(&accounts[3])?;
-            let pos = UserPosition::from_account(&accounts[4])?;
-            pos.verify_binding(accounts[0].address(), accounts[3].address())?;
-            let debt = math::current_borrow_balance(
-                pos.borrow_principal,
-                pool.borrow_index,
-                pos.borrow_index_snapshot,
-            )?;
-            (pool.borrow_index, debt)
+            pool.borrow_index
         };
         {
             let pos = UserPosition::from_account_mut(&accounts[4])?;
-            // Settle accrued interest into principal, then add new borrow.
-            pos.borrow_principal = existing_debt.saturating_add(self.amount);
-            pos.borrow_index_snapshot = borrow_index;
+            apply_borrow_to_position(pos, existing_debt, self.amount, borrow_index);
         }
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
-            pool.total_borrows = pool.total_borrows.saturating_add(self.amount);
+            apply_borrow_to_pool(pool, self.amount);
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::{LIQ_THRESHOLD, LTV, WAD};
+
+    fn pool() -> LendingPool {
+        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
+        pool.discriminator = LendingPool::DISCRIMINATOR;
+        pool.borrow_index = WAD;
+        pool.supply_index = WAD;
+        pool.ltv = LTV;
+        pool.liquidation_threshold = LIQ_THRESHOLD;
+        pool.authority_bump = 7;
+        pool
+    }
+
+    fn position(deposit_shares: u64, borrow_principal: u64) -> UserPosition {
+        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
+        pos.discriminator = UserPosition::DISCRIMINATOR;
+        pos.deposit_shares = deposit_shares;
+        pos.borrow_principal = borrow_principal;
+        pos.deposit_index_snapshot = WAD;
+        pos.borrow_index_snapshot = WAD;
+        pos
+    }
+
+    #[test]
+    fn borrow_validate_rejects_paused_pool() {
+        let mut pool = pool();
+        pool.paused = 1;
+        assert_eq!(validate_borrow(&pool, &position(1_000, 0), 1), Err(LendError::PoolPaused.into()));
+    }
+
+    #[test]
+    fn borrow_validate_rejects_excess_collateral_factor() {
+        let mut pool = pool();
+        pool.total_deposits = 10_000;
+        assert_eq!(
+            validate_borrow(&pool, &position(1_000, 0), 751),
+            Err(LendError::ExceedsCollateralFactor.into())
+        );
+    }
+
+    #[test]
+    fn borrow_validate_rejects_undercollateralised_after_borrow() {
+        let mut pool = pool();
+        pool.total_deposits = 10_000;
+        pool.ltv = WAD;
+        assert_eq!(
+            validate_borrow(&pool, &position(1_000, 0), 900),
+            Err(LendError::Undercollateralised.into())
+        );
+    }
+
+    #[test]
+    fn borrow_validate_rejects_insufficient_liquidity() {
+        let mut pool = pool();
+        pool.total_deposits = 500;
+        pool.total_borrows = 100;
+        pool.accumulated_fees = 50;
+        assert_eq!(
+            validate_borrow(&pool, &position(2_000, 0), 600),
+            Err(LendError::InsufficientLiquidity.into())
+        );
+    }
+
+    #[test]
+    fn borrow_validate_returns_existing_debt_and_bump() {
+        let mut pool = pool();
+        pool.total_deposits = 10_000;
+        assert_eq!(validate_borrow(&pool, &position(2_000, 300), 400), Ok((300, 7)));
+    }
+
+    #[test]
+    fn borrow_apply_position_updates_debt_and_snapshot() {
+        let mut pos = position(2_000, 300);
+        apply_borrow_to_position(&mut pos, 300, 400, 123);
+        assert_eq!(pos.borrow_principal, 700);
+        assert_eq!(pos.borrow_index_snapshot, 123);
+    }
+
+    #[test]
+    fn borrow_apply_pool_updates_total_borrows() {
+        let mut pool = pool();
+        pool.total_borrows = 300;
+        apply_borrow_to_pool(&mut pool, 400);
+        assert_eq!(pool.total_borrows, 700);
     }
 }
