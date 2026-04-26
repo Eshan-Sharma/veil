@@ -13,7 +13,7 @@ Groups:
 
 mod common;
 
-use common::{enc_position_bytes, ika_position_bytes, make_pool, make_pyth_bytes, pool_bytes, user_position_bytes, RawAccount};
+use common::{make_pool, pool_bytes, RawAccount};
 use veil_lending::{
     errors::LendError,
     instructions::{EnablePrivacy, FlashRepay, IkaRegister, IkaRelease, IkaSign, PrivateBorrow, PrivateDeposit, UpdateOraclePrice},
@@ -61,6 +61,88 @@ fn make_dwallet_bytes(authority: [u8; 32], state: u8, discriminator: u8) -> Vec<
     data
 }
 
+fn make_pyth_bytes(price: i64, conf: u64, expo: i32, status: u32) -> Vec<u8> {
+    let mut data = vec![0u8; 512];
+    data[0..4].copy_from_slice(&0xa1b2c3d4u32.to_le_bytes());
+    data[4..8].copy_from_slice(&2u32.to_le_bytes());
+    data[8..12].copy_from_slice(&3u32.to_le_bytes());
+    data[20..24].copy_from_slice(&expo.to_le_bytes());
+    data[208..216].copy_from_slice(&price.to_le_bytes());
+    data[216..224].copy_from_slice(&conf.to_le_bytes());
+    data[224..228].copy_from_slice(&status.to_le_bytes());
+    data
+}
+
+fn ika_position_bytes(
+    owner: [u8; 32],
+    pool: [u8; 32],
+    dwallet: [u8; 32],
+    usd_value: u64,
+    curve: u16,
+    signature_scheme: u16,
+    bump: u8,
+) -> Vec<u8> {
+    let mut pos: IkaDwalletPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator = IkaDwalletPosition::DISCRIMINATOR;
+    pos.owner = pinocchio::Address::new_from_array(owner);
+    pos.pool = pinocchio::Address::new_from_array(pool);
+    pos.dwallet = pinocchio::Address::new_from_array(dwallet);
+    pos.usd_value = usd_value;
+    pos.curve = curve;
+    pos.signature_scheme = signature_scheme;
+    pos.status = status::ACTIVE;
+    pos.bump = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const IkaDwalletPosition as *const u8,
+            IkaDwalletPosition::SIZE,
+        )
+        .to_vec()
+    }
+}
+
+fn enc_position_bytes(owner: [u8; 32], pool: [u8; 32], bump: u8) -> Vec<u8> {
+    let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator = EncryptedPosition::DISCRIMINATOR;
+    pos.owner = pinocchio::Address::new_from_array(owner);
+    pos.pool = pinocchio::Address::new_from_array(pool);
+    pos.bump = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const EncryptedPosition as *const u8,
+            EncryptedPosition::SIZE,
+        )
+        .to_vec()
+    }
+}
+
+fn user_position_bytes(
+    owner: [u8; 32],
+    pool: [u8; 32],
+    deposit_shares: u64,
+    borrow_principal: u64,
+    deposit_index_snapshot: u128,
+    borrow_index_snapshot: u128,
+    bump: u8,
+) -> Vec<u8> {
+    let mut pos: veil_lending::state::UserPosition = unsafe { core::mem::zeroed() };
+    pos.discriminator = veil_lending::state::UserPosition::DISCRIMINATOR;
+    pos.owner = pinocchio::Address::new_from_array(owner);
+    pos.pool = pinocchio::Address::new_from_array(pool);
+    pos.deposit_shares = deposit_shares;
+    pos.borrow_principal = borrow_principal;
+    pos.deposit_index_snapshot = deposit_index_snapshot;
+    pos.borrow_index_snapshot = borrow_index_snapshot;
+    pos.bump = bump;
+    unsafe {
+        core::slice::from_raw_parts(
+            &pos as *const veil_lending::state::UserPosition as *const u8,
+            veil_lending::state::UserPosition::SIZE,
+        )
+        .to_vec()
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 //  GROUP 1 — CORE LENDING PROTOCOL
@@ -70,7 +152,7 @@ fn make_dwallet_bytes(authority: [u8; 32], state: u8, discriminator: u8) -> Vec<
 // ── 1a. State sizing ──────────────────────────────────────────────────────────
 
 #[test]
-fn core__lending_pool_size_is_416() {
+fn core_lending_pool_size_is_416() {
     assert_eq!(
         core::mem::size_of::<LendingPool>(),
         416,
@@ -80,21 +162,21 @@ fn core__lending_pool_size_is_416() {
 }
 
 #[test]
-fn core__lending_pool_discriminator_is_set() {
+fn core_lending_pool_discriminator_is_set() {
     assert_eq!(&LendingPool::DISCRIMINATOR, b"VEILPOOL");
 }
 
 // ── 1b. Deposit maths ────────────────────────────────────────────────────────
 
 #[test]
-fn core__deposit_mints_1_to_1_at_initial_index() {
+fn core_deposit_mints_1_to_1_at_initial_index() {
     let pool = make_pool(AUTHORITY, 0);
     let shares = deposit_to_shares(10_000, pool.supply_index).unwrap();
     assert_eq!(shares, 10_000);
 }
 
 #[test]
-fn core__deposit_after_10pct_growth_mints_fewer_shares() {
+fn core_deposit_after_10pct_growth_mints_fewer_shares() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.supply_index = WAD + WAD / 10; // 1.1 × WAD
     let shares = deposit_to_shares(1_100, pool.supply_index).unwrap();
@@ -102,7 +184,7 @@ fn core__deposit_after_10pct_growth_mints_fewer_shares() {
 }
 
 #[test]
-fn core__deposit_redeem_round_trip() {
+fn core_deposit_redeem_round_trip() {
     let pool = make_pool(AUTHORITY, 0);
     let shares = deposit_to_shares(50_000, pool.supply_index).unwrap();
     let redeemed = current_deposit_balance(shares, pool.supply_index).unwrap();
@@ -110,7 +192,7 @@ fn core__deposit_redeem_round_trip() {
 }
 
 #[test]
-fn core__depositor_earns_interest_after_1_year() {
+fn core_depositor_earns_interest_after_1_year() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.total_deposits = 1_000_000;
     pool.total_borrows = 600_000;
@@ -129,41 +211,41 @@ fn core__depositor_earns_interest_after_1_year() {
 // ── 1c. Borrow / LTV / health-factor ─────────────────────────────────────────
 
 #[test]
-fn core__max_borrow_is_75pct_of_deposit() {
+fn core_max_borrow_is_75pct_of_deposit() {
     let _pool = make_pool(AUTHORITY, 0);
     let max = max_borrowable(1_000_000u64, LTV).unwrap();
     assert_eq!(max, 750_000);
 }
 
 #[test]
-fn core__borrow_at_ltv_is_still_healthy() {
+fn core_borrow_at_ltv_is_still_healthy() {
     let borrow = max_borrowable(1_000_000u64, LTV).unwrap();
     let hf = health_factor(1_000_000, borrow, LIQ_THRESHOLD).unwrap();
     assert!(hf > WAD, "position at LTV cap must remain above liquidation threshold");
 }
 
 #[test]
-fn core__health_factor_exactly_1_at_liq_threshold() {
+fn core_health_factor_exactly_1_at_liq_threshold() {
     // deposit=1_250, liq_threshold=0.80 → 1_250*0.8=1_000=debt
     let hf = health_factor(1_250, 1_000, LIQ_THRESHOLD).unwrap();
     assert_eq!(hf, WAD);
 }
 
 #[test]
-fn core__underwater_position_hf_below_1() {
+fn core_underwater_position_hf_below_1() {
     let hf = health_factor(100, 1_000, LIQ_THRESHOLD).unwrap();
     assert!(hf < WAD);
 }
 
 #[test]
-fn core__no_debt_gives_max_hf() {
+fn core_no_debt_gives_max_hf() {
     assert_eq!(health_factor(1_000_000, 0, LIQ_THRESHOLD).unwrap(), u128::MAX);
 }
 
 // ── 1d. Repay / interest accrual ─────────────────────────────────────────────
 
 #[test]
-fn core__interest_accrual_grows_effective_debt() {
+fn core_interest_accrual_grows_effective_debt() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.total_deposits = 1_000_000;
     pool.total_borrows = 600_000;
@@ -180,7 +262,7 @@ fn core__interest_accrual_grows_effective_debt() {
 }
 
 #[test]
-fn core__full_repay_clears_debt() {
+fn core_full_repay_clears_debt() {
     let pool = make_pool(AUTHORITY, 0);
     let principal = 500_000u64;
     let debt = current_borrow_balance(principal, pool.borrow_index, pool.borrow_index).unwrap();
@@ -190,7 +272,7 @@ fn core__full_repay_clears_debt() {
 // ── 1e. Liquidation maths ────────────────────────────────────────────────────
 
 #[test]
-fn core__liquidation_full_scenario() {
+fn core_liquidation_full_scenario() {
     // deposit=1_000, debt=900, HF≈0.888 → liquidatable
     let hf = health_factor(1_000, 900, LIQ_THRESHOLD).unwrap();
     assert!(hf < WAD);
@@ -209,7 +291,7 @@ fn core__liquidation_full_scenario() {
 }
 
 #[test]
-fn core__liquidation_not_allowed_when_healthy() {
+fn core_liquidation_not_allowed_when_healthy() {
     let hf = health_factor(2_000, 1_000, LIQ_THRESHOLD).unwrap();
     // HF = (2000*0.8)/1000 = 1.6 WAD → healthy
     assert!(hf >= WAD);
@@ -218,19 +300,19 @@ fn core__liquidation_not_allowed_when_healthy() {
 // ── 1f. Flash loan maths ─────────────────────────────────────────────────────
 
 #[test]
-fn core__flash_fee_is_9_bps() {
+fn core_flash_fee_is_9_bps() {
     assert_eq!(flash_fee(1_000_000, FLASH_FEE_BPS).unwrap(), 900);
 }
 
 #[test]
-fn core__flash_fee_split_90_10() {
+fn core_flash_fee_split_90_10() {
     let (lp, protocol) = split_flash_fee(100);
     assert_eq!(protocol, 10);
     assert_eq!(lp, 90);
 }
 
 #[test]
-fn core__flash_loan_round_trip_accounting() {
+fn core_flash_loan_round_trip_accounting() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.total_deposits = 1_000_000;
     let loan = 100_000u64;
@@ -243,7 +325,7 @@ fn core__flash_loan_round_trip_accounting() {
 }
 
 #[test]
-fn core__flash_repay_without_active_loan_is_rejected() {
+fn core_flash_repay_without_active_loan_is_rejected() {
     let pool = make_pool(AUTHORITY, 0);
     let mut borrower = RawAccount::new(USER, true, true, &[]);
     let mut borrower_token = RawAccount::new([0x51u8; 32], false, true, &[]);
@@ -263,7 +345,7 @@ fn core__flash_repay_without_active_loan_is_rejected() {
 // ── 1g. Interest rate model ───────────────────────────────────────────────────
 
 #[test]
-fn core__rate_kink_at_80pct_utilization() {
+fn core_rate_kink_at_80pct_utilization() {
     let util = math::utilization_rate(800_000, 1_000_000).unwrap();
     let rate = math::borrow_rate(util, BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2).unwrap();
     // At the kink: BASE_RATE + SLOPE1 * (optimal / optimal) = BASE_RATE + SLOPE1
@@ -271,7 +353,7 @@ fn core__rate_kink_at_80pct_utilization() {
 }
 
 #[test]
-fn core__rate_jump_above_kink_is_significant() {
+fn core_rate_jump_above_kink_is_significant() {
     let u_low = math::utilization_rate(700_000, 1_000_000).unwrap();
     let u_high = math::utilization_rate(900_000, 1_000_000).unwrap();
     let r_low  = math::borrow_rate(u_low,  BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2).unwrap();
@@ -283,7 +365,7 @@ fn core__rate_jump_above_kink_is_significant() {
 // ── 1h. Oracle (Pyth) — core lending context ─────────────────────────────────
 
 #[test]
-fn core__oracle_valid_price_accepted() {
+fn core_oracle_valid_price_accepted() {
     let pyth = valid_pyth(16_842_000_000, -8); // $168.42
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
@@ -295,7 +377,7 @@ fn core__oracle_valid_price_accepted() {
 }
 
 #[test]
-fn core__oracle_caches_price_in_pool() {
+fn core_oracle_caches_price_in_pool() {
     let pyth = valid_pyth(16_842_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
@@ -309,7 +391,7 @@ fn core__oracle_caches_price_in_pool() {
 }
 
 #[test]
-fn core__oracle_anchors_feed_on_first_call() {
+fn core_oracle_anchors_feed_on_first_call() {
     let pyth = valid_pyth(10_000_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
@@ -322,7 +404,7 @@ fn core__oracle_anchors_feed_on_first_call() {
 }
 
 #[test]
-fn core__oracle_attack_feed_substitution_rejected() {
+fn core_oracle_attack_feed_substitution_rejected() {
     // First call anchors FEED_A; second call with FEED_B must fail.
     let pyth_a = valid_pyth(10_000_000_000, -8);
     let pyth_b = valid_pyth(10_000_000_000, -8);
@@ -352,7 +434,7 @@ fn core__oracle_attack_feed_substitution_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_wrong_magic_rejected() {
+fn core_oracle_attack_wrong_magic_rejected() {
     let mut bad = make_pyth_bytes(10_000_000_000, 1, -8, 1);
     bad[0..4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes()); // corrupt magic
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -365,7 +447,7 @@ fn core__oracle_attack_wrong_magic_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_wrong_atype_rejected() {
+fn core_oracle_attack_wrong_atype_rejected() {
     let mut bad = make_pyth_bytes(10_000_000_000, 1, -8, 1);
     bad[8..12].copy_from_slice(&2u32.to_le_bytes()); // atype=2 is ProductAccount, not Price
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -378,7 +460,7 @@ fn core__oracle_attack_wrong_atype_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_stale_status_rejected() {
+fn core_oracle_attack_stale_status_rejected() {
     // status=0 means Unknown (not Trading)
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 0);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -391,7 +473,7 @@ fn core__oracle_attack_stale_status_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_halted_status_rejected() {
+fn core_oracle_attack_halted_status_rejected() {
     // status=2 means Halted
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 2);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -404,7 +486,7 @@ fn core__oracle_attack_halted_status_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_zero_price_rejected() {
+fn core_oracle_attack_zero_price_rejected() {
     let bad = make_pyth_bytes(0, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
@@ -416,7 +498,7 @@ fn core__oracle_attack_zero_price_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_negative_price_rejected() {
+fn core_oracle_attack_negative_price_rejected() {
     let bad = make_pyth_bytes(-1, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
@@ -428,7 +510,7 @@ fn core__oracle_attack_negative_price_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_short_account_rejected() {
+fn core_oracle_attack_short_account_rejected() {
     // Account with only 100 bytes — too short for any Pyth field reads
     let short = vec![0xd4u8, 0xc3, 0xb2, 0xa1, 0, 0, 0, 0, 3, 0, 0, 0]; // magic+ver+atype only
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -441,7 +523,7 @@ fn core__oracle_attack_short_account_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_empty_account_rejected() {
+fn core_oracle_attack_empty_account_rejected() {
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &[]);
     let result = unsafe {
@@ -452,7 +534,7 @@ fn core__oracle_attack_empty_account_rejected() {
 }
 
 #[test]
-fn core__oracle_attack_confidence_too_wide_rejected() {
+fn core_oracle_attack_confidence_too_wide_rejected() {
     // price = 1_000_000, conf = 21_000 → conf/price = 2.1% > 2% threshold
     let bad = make_pyth_bytes(1_000_000, 21_000, -6, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -466,7 +548,7 @@ fn core__oracle_attack_confidence_too_wide_rejected() {
 }
 
 #[test]
-fn core__oracle_confidence_exactly_at_2pct_boundary_accepted() {
+fn core_oracle_confidence_exactly_at_2pct_boundary_accepted() {
     // price = 1_000_000, conf = 20_000 → conf/price = exactly 2% → accepted
     // check: conf * 50 = 1_000_000 = price → NOT > price, so OK
     let ok = make_pyth_bytes(1_000_000, 20_000, -6, 1);
@@ -480,7 +562,7 @@ fn core__oracle_confidence_exactly_at_2pct_boundary_accepted() {
 }
 
 #[test]
-fn core__oracle_second_valid_update_with_same_feed_accepted() {
+fn core_oracle_second_valid_update_with_same_feed_accepted() {
     let pyth1 = valid_pyth(10_000_000_000, -8);
     let pyth2 = valid_pyth(10_100_000_000, -8); // price moved slightly
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -518,25 +600,25 @@ fn core__oracle_second_valid_update_with_same_feed_accepted() {
 // ── 2a. EncryptedPosition account layout ─────────────────────────────────────
 
 #[test]
-fn enc__encrypted_position_size_is_144() {
+fn enc_encrypted_position_size_is_144() {
     assert_eq!(core::mem::size_of::<EncryptedPosition>(), EncryptedPosition::SIZE);
     assert_eq!(EncryptedPosition::SIZE, 144);
 }
 
 #[test]
-fn enc__encrypted_position_discriminator_is_veilenc() {
+fn enc_encrypted_position_discriminator_is_veilenc() {
     assert_eq!(&EncryptedPosition::DISCRIMINATOR, b"VEILENC!");
 }
 
 #[test]
-fn enc__encrypted_position_zeroed_has_zero_ciphertexts() {
+fn enc_encrypted_position_zeroed_has_zero_ciphertexts() {
     let pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     assert_eq!(pos.enc_deposit, [0u8; 32]);
     assert_eq!(pos.enc_debt, [0u8; 32]);
 }
 
 #[test]
-fn enc__encrypted_position_bytes_roundtrip() {
+fn enc_encrypted_position_bytes_roundtrip() {
     let _enc_deposit_key = [0xCCu8; 32];
     let _enc_debt_key    = [0xDDu8; 32];
     let bytes = enc_position_bytes(USER, POOL_KEY, 254);
@@ -556,25 +638,25 @@ fn enc__encrypted_position_bytes_roundtrip() {
 }
 
 #[test]
-fn enc__enable_privacy_discriminator_is_eight() {
+fn enc_enable_privacy_discriminator_is_eight() {
     assert_eq!(EnablePrivacy::DISCRIMINATOR, 8);
 }
 
 #[test]
-fn enc__enable_privacy_from_data_parses_bumps() {
+fn enc_enable_privacy_from_data_parses_bumps() {
     let ix = EnablePrivacy::from_data(&[0x42, 0xFF]).unwrap();
     assert_eq!(ix.enc_pos_bump, 0x42);
     assert_eq!(ix.cpi_auth_bump, 0xFF);
 }
 
 #[test]
-fn enc__enable_privacy_from_data_too_short_fails() {
+fn enc_enable_privacy_from_data_too_short_fails() {
     assert!(EnablePrivacy::from_data(&[]).is_err());
     assert!(EnablePrivacy::from_data(&[1]).is_err());
 }
 
 #[test]
-fn enc__encrypted_position_stores_distinct_ciphertext_keys() {
+fn enc_encrypted_position_stores_distinct_ciphertext_keys() {
     // Verify the layout stores two independent 32-byte keys at correct offsets
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
@@ -594,7 +676,7 @@ fn enc__encrypted_position_stores_distinct_ciphertext_keys() {
 }
 
 #[test]
-fn enc__wrong_enc_deposit_ciphertext_substitution_is_rejected() {
+fn enc_wrong_enc_deposit_ciphertext_substitution_is_rejected() {
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
     pos.enc_deposit = [0xAAu8; 32];
@@ -620,7 +702,7 @@ fn enc__wrong_enc_deposit_ciphertext_substitution_is_rejected() {
 }
 
 #[test]
-fn enc__position_binding_rejects_wrong_owner() {
+fn enc_position_binding_rejects_wrong_owner() {
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
     pos.owner = pinocchio::Address::new_from_array(USER);
@@ -643,7 +725,7 @@ fn enc__position_binding_rejects_wrong_owner() {
 }
 
 #[test]
-fn enc__position_binding_rejects_wrong_pool() {
+fn enc_position_binding_rejects_wrong_pool() {
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
     pos.owner = pinocchio::Address::new_from_array(USER);
@@ -666,7 +748,7 @@ fn enc__position_binding_rejects_wrong_pool() {
 }
 
 #[test]
-fn enc__wrong_enc_debt_ciphertext_substitution_is_rejected() {
+fn enc_wrong_enc_debt_ciphertext_substitution_is_rejected() {
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
     pos.enc_deposit = [0xAAu8; 32];
@@ -692,7 +774,7 @@ fn enc__wrong_enc_debt_ciphertext_substitution_is_rejected() {
 }
 
 #[test]
-fn enc__swapping_deposit_and_debt_ciphertext_accounts_is_rejected() {
+fn enc_swapping_deposit_and_debt_ciphertext_accounts_is_rejected() {
     let mut pos: EncryptedPosition = unsafe { core::mem::zeroed() };
     pos.discriminator = EncryptedPosition::DISCRIMINATOR;
     pos.enc_deposit = [0xAAu8; 32];
@@ -730,7 +812,7 @@ fn enc__swapping_deposit_and_debt_ciphertext_accounts_is_rejected() {
 // values to borrow more than permitted (plaintext health-factor still enforced).
 
 #[test]
-fn enc__oracle_valid_price_serves_encrypted_pool() {
+fn enc_oracle_valid_price_serves_encrypted_pool() {
     let pyth = valid_pyth(3_240_000_000_000, -8); // $32,400 (BTC-ish)
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
@@ -746,10 +828,10 @@ fn enc__oracle_valid_price_serves_encrypted_pool() {
 }
 
 #[test]
-fn enc__oracle_update_on_pool_a_does_not_mutate_pool_b_cache() {
+fn enc_oracle_update_on_pool_a_does_not_mutate_pool_b_cache() {
     let pyth = valid_pyth(3_240_000_000_000, -8);
     let mut pool_a = RawAccount::new([0xA1u8; 32], false, true, &unanchored_pool());
-    let mut pool_b = RawAccount::new([0xB1u8; 32], false, true, &unanchored_pool());
+    let pool_b = RawAccount::new([0xB1u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
 
     unsafe {
@@ -768,7 +850,7 @@ fn enc__oracle_update_on_pool_a_does_not_mutate_pool_b_cache() {
 }
 
 #[test]
-fn enc__private_deposit_rejects_paused_pool() {
+fn enc_private_deposit_rejects_paused_pool() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.paused = 1;
     let pos = user_position_bytes(USER, POOL_KEY, 0, 0, WAD, WAD, 1);
@@ -806,7 +888,7 @@ fn enc__private_deposit_rejects_paused_pool() {
 }
 
 #[test]
-fn enc__private_borrow_rejects_paused_pool() {
+fn enc_private_borrow_rejects_paused_pool() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.paused = 1;
     pool.authority_bump = 1;
@@ -851,7 +933,7 @@ fn enc__private_borrow_rejects_paused_pool() {
 }
 
 #[test]
-fn enc__enable_privacy_rejects_reinitializing_existing_encrypted_position() {
+fn enc_enable_privacy_rejects_reinitializing_existing_encrypted_position() {
     let pool = make_pool(AUTHORITY, 0);
     let pos = user_position_bytes(USER, POOL_KEY, 100, 0, WAD, WAD, 1);
     let existing_enc = enc_position_bytes(USER, POOL_KEY, 1);
@@ -883,7 +965,7 @@ fn enc__enable_privacy_rejects_reinitializing_existing_encrypted_position() {
 }
 
 #[test]
-fn enc__oracle_attack_manipulated_price_with_wide_conf_rejected() {
+fn enc_oracle_attack_manipulated_price_with_wide_conf_rejected() {
     // Attacker uses flash loan to push price up; Pyth aggregation uncertainty widens.
     // price = 5_000_000, conf = 101_000 → conf/price ≈ 2.02% > 2% → OracleConfTooWide
     let bad = make_pyth_bytes(5_000_000, 101_000, -6, 1);
@@ -898,7 +980,7 @@ fn enc__oracle_attack_manipulated_price_with_wide_conf_rejected() {
 }
 
 #[test]
-fn enc__oracle_attack_halted_feed_on_encrypted_pool_rejected() {
+fn enc_oracle_attack_halted_feed_on_encrypted_pool_rejected() {
     // During market closure, encrypted borrowers cannot manipulate prices.
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 2); // status=Halted
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -911,7 +993,7 @@ fn enc__oracle_attack_halted_feed_on_encrypted_pool_rejected() {
 }
 
 #[test]
-fn enc__oracle_attack_substitution_on_encrypted_pool_rejected() {
+fn enc_oracle_attack_substitution_on_encrypted_pool_rejected() {
     // Anchor feed A, then try to substitute feed B on the encrypted pool.
     let pyth_a = valid_pyth(10_000_000_000, -8);
     let pyth_b = valid_pyth(10_000_000_000, -8);
@@ -939,7 +1021,7 @@ fn enc__oracle_attack_substitution_on_encrypted_pool_rejected() {
 }
 
 #[test]
-fn enc__oracle_attack_short_data_on_encrypted_pool_rejected() {
+fn enc_oracle_attack_short_data_on_encrypted_pool_rejected() {
     let short = vec![0u8; 100];
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &short);
@@ -953,7 +1035,7 @@ fn enc__oracle_attack_short_data_on_encrypted_pool_rejected() {
 // ── 2c. Plaintext health factor still enforced when position is encrypted ─────
 
 #[test]
-fn enc__health_factor_enforced_on_encrypted_position() {
+fn enc_health_factor_enforced_on_encrypted_position() {
     // Even with encrypted amounts, HF calculation uses plaintext UserPosition.
     // This test verifies the math is correct: amounts are hidden but the
     // protocol's enforcement boundary (HF ≥ 1) remains.
@@ -973,18 +1055,18 @@ fn enc__health_factor_enforced_on_encrypted_position() {
 // ── 3a. IkaDwalletPosition layout ────────────────────────────────────────────
 
 #[test]
-fn ika__dwallet_position_size_is_128() {
+fn ika_dwallet_position_size_is_128() {
     assert_eq!(core::mem::size_of::<IkaDwalletPosition>(), IkaDwalletPosition::SIZE);
     assert_eq!(IkaDwalletPosition::SIZE, 128);
 }
 
 #[test]
-fn ika__dwallet_position_discriminator_is_veilika() {
+fn ika_dwallet_position_discriminator_is_veilika() {
     assert_eq!(&IkaDwalletPosition::DISCRIMINATOR, b"VEILIKA!");
 }
 
 #[test]
-fn ika__curve_constants_are_sequential() {
+fn ika_curve_constants_are_sequential() {
     assert_eq!(curve::SECP256K1,  0);
     assert_eq!(curve::SECP256R1,  1);
     assert_eq!(curve::CURVE25519, 2);
@@ -992,7 +1074,7 @@ fn ika__curve_constants_are_sequential() {
 }
 
 #[test]
-fn ika__scheme_constants_span_full_range() {
+fn ika_scheme_constants_span_full_range() {
     assert_eq!(scheme::ECDSA_KECCAK256,    0);
     assert_eq!(scheme::ECDSA_SHA256,       1);
     assert_eq!(scheme::ECDSA_DOUBLE_SHA256,2);
@@ -1003,14 +1085,14 @@ fn ika__scheme_constants_span_full_range() {
 }
 
 #[test]
-fn ika__status_constants() {
+fn ika_status_constants() {
     assert_eq!(status::ACTIVE,     0);
     assert_eq!(status::RELEASED,   1);
     assert_eq!(status::LIQUIDATED, 2);
 }
 
 #[test]
-fn ika__dwallet_position_bytes_roundtrip() {
+fn ika_dwallet_position_bytes_roundtrip() {
     let bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 254);
     assert_eq!(bytes.len(), IkaDwalletPosition::SIZE);
 
@@ -1037,7 +1119,7 @@ fn make_register_data(usd_value: u64, curve: u16, scheme: u16, pos_bump: u8, cpi
 }
 
 #[test]
-fn ika__register_from_data_parses_correctly() {
+fn ika_register_from_data_parses_correctly() {
     let d = make_register_data(1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 254, 255);
     let ix = IkaRegister::from_data(&d).unwrap();
     assert_eq!(ix.usd_value, 1_200_000);
@@ -1048,18 +1130,18 @@ fn ika__register_from_data_parses_correctly() {
 }
 
 #[test]
-fn ika__register_from_data_too_short_fails() {
+fn ika_register_from_data_too_short_fails() {
     assert!(IkaRegister::from_data(&[0u8; 13]).is_err());
     assert!(IkaRegister::from_data(&[]).is_err());
 }
 
 #[test]
-fn ika__register_discriminator_is_17() {
+fn ika_register_discriminator_is_17() {
     assert_eq!(IkaRegister::DISCRIMINATOR, 17);
 }
 
 #[test]
-fn ika__register_missing_signer_rejected() {
+fn ika_register_missing_signer_rejected() {
     let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
     let mut user  = RawAccount::new(USER,      false /* NOT signer */, true, &[]);
     let mut pool  = RawAccount::new(POOL_KEY,  false, false, &unanchored_pool());
@@ -1075,7 +1157,7 @@ fn ika__register_missing_signer_rejected() {
 }
 
 #[test]
-fn ika__register_wrong_cpi_authority_pda_rejected() {
+fn ika_register_wrong_cpi_authority_pda_rejected() {
     let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1099,7 +1181,7 @@ fn ika__register_wrong_cpi_authority_pda_rejected() {
 }
 
 #[test]
-fn ika__register_wrong_ika_program_owner_rejected() {
+fn ika_register_wrong_ika_program_owner_rejected() {
     let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1123,7 +1205,7 @@ fn ika__register_wrong_ika_program_owner_rejected() {
 }
 
 #[test]
-fn ika__register_inactive_or_frozen_dwallet_rejected() {
+fn ika_register_inactive_or_frozen_dwallet_rejected() {
     let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1147,7 +1229,7 @@ fn ika__register_inactive_or_frozen_dwallet_rejected() {
 }
 
 #[test]
-fn ika__register_malformed_dwallet_layout_rejected() {
+fn ika_register_malformed_dwallet_layout_rejected() {
     let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1170,17 +1252,17 @@ fn ika__register_malformed_dwallet_layout_rejected() {
 }
 
 #[test]
-fn ika__release_discriminator_is_18() {
+fn ika_release_discriminator_is_18() {
     assert_eq!(IkaRelease::DISCRIMINATOR, 18);
 }
 
 #[test]
-fn ika__sign_discriminator_is_19() {
+fn ika_sign_discriminator_is_19() {
     assert_eq!(IkaSign::DISCRIMINATOR, 19);
 }
 
 #[test]
-fn ika__released_position_cannot_release_again() {
+fn ika_released_position_cannot_release_again() {
     let mut pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     pos_bytes[116] = status::RELEASED;
 
@@ -1206,7 +1288,7 @@ fn ika__released_position_cannot_release_again() {
 }
 
 #[test]
-fn ika__non_owner_cannot_release_position() {
+fn ika_non_owner_cannot_release_position() {
     let pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1230,7 +1312,7 @@ fn ika__non_owner_cannot_release_position() {
 }
 
 #[test]
-fn ika__active_position_with_wrong_dwallet_bound_fails_sign() {
+fn ika_active_position_with_wrong_dwallet_bound_fails_sign() {
     let pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     let cpi_authority = pinocchio::Address::derive_address(
         &[CPI_AUTHORITY_SEED],
@@ -1259,7 +1341,7 @@ fn ika__active_position_with_wrong_dwallet_bound_fails_sign() {
 }
 
 #[test]
-fn ika__released_or_liquidated_position_cannot_sign() {
+fn ika_released_or_liquidated_position_cannot_sign() {
     for status_byte in [status::RELEASED, status::LIQUIDATED] {
         let mut pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
         pos_bytes[116] = status_byte;
@@ -1292,7 +1374,7 @@ fn ika__released_or_liquidated_position_cannot_sign() {
 }
 
 #[test]
-fn ika__wrong_cpi_authority_bump_fails_sign() {
+fn ika_wrong_cpi_authority_bump_fails_sign() {
     let pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     let mut user = RawAccount::new(USER, true, true, &[]);
     let mut coordinator = RawAccount::new([7u8; 32], false, false, &[]);
@@ -1321,7 +1403,7 @@ fn ika__wrong_cpi_authority_bump_fails_sign() {
 // Oracle manipulation remains blocked by the same checks regardless of context.
 
 #[test]
-fn ika__oracle_valid_btc_price_accepted() {
+fn ika_oracle_valid_btc_price_accepted() {
     // BTC at ~$61,200 (expo -8)
     let pyth = valid_pyth(61_200_00_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -1334,7 +1416,7 @@ fn ika__oracle_valid_btc_price_accepted() {
 }
 
 #[test]
-fn ika__oracle_attack_substitute_btc_feed_with_cheaper_feed() {
+fn ika_oracle_attack_substitute_btc_feed_with_cheaper_feed() {
     // An attacker tries to substitute the legitimate BTC Pyth feed with an
     // easier-to-manipulate feed to inflate their dWallet collateral value.
     let btc_price = valid_pyth(61_200_00_000_000, -8);
@@ -1364,7 +1446,7 @@ fn ika__oracle_attack_substitute_btc_feed_with_cheaper_feed() {
 }
 
 #[test]
-fn ika__oracle_attack_wide_conf_during_btc_volatility_rejected() {
+fn ika_oracle_attack_wide_conf_during_btc_volatility_rejected() {
     // BTC price=61_200_00_000_000 (large), conf must be < 2% of price.
     // 2% of 61_200_00_000_000 = 1_224_000_000_000.
     // conf = 1_224_000_000_001 → rejected.
@@ -1379,7 +1461,7 @@ fn ika__oracle_attack_wide_conf_during_btc_volatility_rejected() {
 }
 
 #[test]
-fn ika__oracle_attack_negative_btc_price_rejected() {
+fn ika_oracle_attack_negative_btc_price_rejected() {
     let bad = make_pyth_bytes(-1, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
     let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
@@ -1391,7 +1473,7 @@ fn ika__oracle_attack_negative_btc_price_rejected() {
 }
 
 #[test]
-fn ika__oracle_attack_crafted_non_pyth_account_rejected() {
+fn ika_oracle_attack_crafted_non_pyth_account_rejected() {
     // An attacker crafts a fake account that looks like a Pyth account but has
     // the wrong magic number, trying to inject an arbitrary price.
     let mut crafted = vec![0u8; 512];
@@ -1417,7 +1499,7 @@ fn ika__oracle_attack_crafted_non_pyth_account_rejected() {
 // ── 4a. Combined account coexistence ─────────────────────────────────────────
 
 #[test]
-fn ika_enc__both_account_types_have_distinct_discriminators() {
+fn ika_enc_both_account_types_have_distinct_discriminators() {
     assert_ne!(
         IkaDwalletPosition::DISCRIMINATOR,
         EncryptedPosition::DISCRIMINATOR,
@@ -1426,7 +1508,7 @@ fn ika_enc__both_account_types_have_distinct_discriminators() {
 }
 
 #[test]
-fn ika_enc__combined_state_sizes_are_known() {
+fn ika_enc_combined_state_sizes_are_known() {
     // A user with both an Ika position and an encrypted lending position has:
     // IkaDwalletPosition (128) + EncryptedPosition (144) + LendingPool (416)
     // = 688 bytes of on-chain state for the position layer alone.
@@ -1435,7 +1517,7 @@ fn ika_enc__combined_state_sizes_are_known() {
 }
 
 #[test]
-fn ika_enc__ika_position_bytes_layout_is_correct() {
+fn ika_enc_ika_position_bytes_layout_is_correct() {
     let bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 5_000_000, curve::SECP256K1, scheme::TAPROOT_SHA256, 200);
     assert_eq!(&bytes[0..8], b"VEILIKA!");
     assert_eq!(bytes[116], status::ACTIVE);
@@ -1443,7 +1525,7 @@ fn ika_enc__ika_position_bytes_layout_is_correct() {
 }
 
 #[test]
-fn ika_enc__enc_position_bytes_layout_is_correct() {
+fn ika_enc_enc_position_bytes_layout_is_correct() {
     let bytes = enc_position_bytes(USER, POOL_KEY, 200);
     assert_eq!(&bytes[0..8], b"VEILENC!");
     assert_eq!(&bytes[8..40],  &USER);
@@ -1451,7 +1533,7 @@ fn ika_enc__enc_position_bytes_layout_is_correct() {
 }
 
 #[test]
-fn ika_enc__ika_position_distinct_from_enc_position_by_discriminator() {
+fn ika_enc_ika_position_distinct_from_enc_position_by_discriminator() {
     let ika_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     let enc_bytes = enc_position_bytes(USER, POOL_KEY, 1);
     // Discriminators differ at offset 0..8
@@ -1461,7 +1543,7 @@ fn ika_enc__ika_position_distinct_from_enc_position_by_discriminator() {
 // ── 4b. Collateral value with oracle ─────────────────────────────────────────
 
 #[test]
-fn ika_enc__usd_value_in_cents_math() {
+fn ika_enc_usd_value_in_cents_math() {
     // dWallet registered at $12,000.00 → usd_value = 1_200_000 cents
     // Expressed in USD: 1_200_000 / 100 = 12_000.0
     let usd_cents = 1_200_000u64;
@@ -1470,7 +1552,7 @@ fn ika_enc__usd_value_in_cents_math() {
 }
 
 #[test]
-fn ika_enc__ltv_of_ika_collateral_math() {
+fn ika_enc_ltv_of_ika_collateral_math() {
     // $12,000 BTC dWallet at 75% LTV → max borrow = $9,000
     let usd_cents = 1_200_000u64;
     let max_borrow = max_borrowable(usd_cents, LTV).unwrap();
@@ -1478,7 +1560,7 @@ fn ika_enc__ltv_of_ika_collateral_math() {
 }
 
 #[test]
-fn ika_enc__health_factor_with_ika_and_encrypted_borrow() {
+fn ika_enc_health_factor_with_ika_and_encrypted_borrow() {
     // dWallet collateral = $12,000 (cents), encrypted borrow = $9,000 (cents)
     // HF = (12_000_00 × 0.80) / 900_000 = 1.0666… > 1 → healthy
     let hf = health_factor(1_200_000, 900_000, LIQ_THRESHOLD).unwrap();
@@ -1486,7 +1568,7 @@ fn ika_enc__health_factor_with_ika_and_encrypted_borrow() {
 }
 
 #[test]
-fn ika_enc__liquidation_of_ika_encrypted_position() {
+fn ika_enc_liquidation_of_ika_encrypted_position() {
     // Simulate: collateral drops to $10,000, debt remains $9,000
     // HF = (10_000_00 × 0.80) / 900_000 = 0.888… < 1 → liquidatable
     let collateral = 1_000_000u64; // $10,000
@@ -1503,7 +1585,7 @@ fn ika_enc__liquidation_of_ika_encrypted_position() {
 // ── 4c. Oracle security — cross-chain private position context ────────────────
 
 #[test]
-fn ika_enc__oracle_valid_price_serves_ika_encrypted_pool() {
+fn ika_enc_oracle_valid_price_serves_ika_encrypted_pool() {
     // Pool used for cross-chain + encrypted positions uses the same oracle.
     let pyth = valid_pyth(168_42_000_000, -8); // $168.42 SOL price
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
@@ -1516,7 +1598,7 @@ fn ika_enc__oracle_valid_price_serves_ika_encrypted_pool() {
 }
 
 #[test]
-fn ika_enc__oracle_attack_flash_loan_widens_conf_rejected() {
+fn ika_enc_oracle_attack_flash_loan_widens_conf_rejected() {
     // An attacker uses a flash loan to move the SOL price in AMMs.
     // Pyth's confidence widens before the aggregate price shifts.
     // price = 1_000_000_000, conf = 20_000_001 → 2.0000001% > 2% → rejected
@@ -1532,7 +1614,7 @@ fn ika_enc__oracle_attack_flash_loan_widens_conf_rejected() {
 }
 
 #[test]
-fn ika_enc__oracle_attack_feed_substitution_on_combined_pool_rejected() {
+fn ika_enc_oracle_attack_feed_substitution_on_combined_pool_rejected() {
     // Anchor the real feed, then try to substitute with an attacker-controlled feed.
     let real_pyth = valid_pyth(10_000_000_000, -8);
     let fake_pyth = valid_pyth(99_999_999_999, -8); // inflated price on fake feed
@@ -1562,7 +1644,7 @@ fn ika_enc__oracle_attack_feed_substitution_on_combined_pool_rejected() {
 }
 
 #[test]
-fn ika_enc__oracle_attack_all_six_vectors_in_sequence() {
+fn ika_enc_oracle_attack_all_six_vectors_in_sequence() {
     // Comprehensive sweep: exercise all six rejection paths against the same pool.
     let pool_data = unanchored_pool();
 
@@ -1596,7 +1678,7 @@ fn ika_enc__oracle_attack_all_six_vectors_in_sequence() {
 }
 
 #[test]
-fn ika_enc__oracle_error_codes_are_unique() {
+fn ika_enc_oracle_error_codes_are_unique() {
     use std::collections::HashSet;
     let codes: Vec<u32> = vec![
         LendError::OracleInvalid as u32,
