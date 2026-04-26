@@ -4,6 +4,7 @@ docs/node_modules/
 programs/target/
 veil-landing/.next/
 veil-landing/node_modules/
+*.tsbuildinfo
 .DS_Store
 PRIVATE_ROADMAP.md
 .env
