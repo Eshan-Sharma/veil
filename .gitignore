@@ -1,6 +1,7 @@
 programs/target/
 docs/.next/
 docs/node_modules/
+docs/public/_pagefind/
 programs/target/
 veil-landing/.next/
 veil-landing/node_modules/
