@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { PublicKey } from "@solana/web3.js";
 import Link from "next/link";
 import { useVeilActions } from "../hooks/useVeilActions";
@@ -37,6 +39,7 @@ function fmtHF(raw: string): string {
 
 export default function LiquidatePage() {
   const { publicKey } = useWallet();
+  const rpc = useSolanaRpc();
   const { liquidate, status, txSig, errorMsg, reset } = useVeilActions();
   const { pools, loading: poolsLoading } = usePools();
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -74,7 +77,7 @@ export default function LiquidatePage() {
 
   const busy = ["building", "signing", "confirming"].includes(status);
   const selected = pools[selectedIdx];
-  const meta = selected ? (SYMBOL_ICONS[selected.symbol] ?? DEFAULT_ICON) : DEFAULT_ICON;
+  const meta = selected ? (SYMBOL_ICONS[selected.symbol] ?? DEFAULT_ICON) : DEFAULT_ICON
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -158,8 +161,9 @@ export default function LiquidatePage() {
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {pools.map((p, i) => {
                   const sel = i === selectedIdx;
-                  const m = SYMBOL_ICONS[p.symbol] ?? DEFAULT_ICON;
-                  return (
+                  const m = SYMBOL_ICONS[p.symbol] ?? DEFAULT_ICON
+
+  return (
                     <button key={p.poolAddress.toBase58()} onClick={() => setSelectedIdx(i)}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 999,
                         border: `1px solid ${sel ? m.color : "#e5e7eb"}`,
@@ -204,7 +208,7 @@ export default function LiquidatePage() {
             <div style={{ marginTop: 14, padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, fontSize: 12.5, color: "#065f46", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>Liquidation confirmed</div>
-                <a href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`} target="_blank" rel="noreferrer"
+                <a href={buildExplorerTxUrl(txSig, rpc)} target="_blank" rel="noreferrer"
                    style={{ color: "#059669", fontSize: 11, fontFamily: "var(--font-mono),monospace" }}>
                   {txSig.slice(0, 10)}…{txSig.slice(-6)} ↗
                 </a>

@@ -4,6 +4,9 @@ import React, { useState, useEffect, CSSProperties } from "react";
 import { WalletButton as WalletMultiButton } from "../components/WalletButton";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
+import { RpcSwitcher } from "./components/RpcSwitcher";
 import { useVeilActions } from "./hooks/useVeilActions";
 import { usePythPrices } from "./hooks/usePythPrices";
 import { formatPrice, PythPrices } from "../../lib/pyth/prices";
@@ -166,13 +169,15 @@ function useCipher(seed = 0) {
       () => setI((p) => (p + 1) % CIPHER_POOL.length),
       2400 + seed * 180,
     );
+
     return () => clearInterval(t);
   }, [seed]);
   return CIPHER_POOL[i];
 }
 
 function CipherVal({ seed, mask }: { seed: number; mask: string }) {
-  const v = useCipher(seed);
+  const v = useCipher(seed)
+
   return (
     <span className="cipher-mask rotate-cipher" title={`ct:${v}`}>
       {mask}
@@ -355,18 +360,21 @@ function AppNav({
   setView,
   fhe,
   setFhe,
+  onOpenRpc,
 }: {
   view: View;
   setView: (v: View) => void;
   fhe: boolean;
   setFhe: (fn: (v: boolean) => boolean) => void;
+  onOpenRpc: () => void;
 }) {
   const { publicKey } = useWallet();
+  const { preset } = useSolanaRpc();
   const tabs: { id: View; label: string }[] = [
     { id: "markets", label: "Markets" },
     { id: "portfolio", label: "Portfolio" },
     { id: "flash", label: "Flash Loans" },
-  ];
+  ]
 
   return (
     <header
@@ -410,7 +418,8 @@ function AppNav({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <PrivacyToggle on={fhe} setOn={setFhe} />
-          <div
+          <button
+            onClick={onOpenRpc}
             style={{
               display: "flex",
               alignItems: "center",
@@ -422,11 +431,18 @@ function AppNav({
               fontSize: 12,
               color: "#5b5b66",
               fontWeight: 500,
+              cursor: "pointer",
             }}
           >
             <span className="pulse-dot" style={{ width: 6, height: 6 }} />
-            Devnet
-          </div>
+            {preset === "mainnet"
+              ? "Mainnet"
+              : preset === "localnet"
+                ? "Localnet"
+                : preset === "custom"
+                  ? "Custom RPC"
+                  : "Devnet"}
+          </button>
           <Link
             href="/dapp/markets"
             style={navPillStyle}
@@ -562,6 +578,7 @@ function AssetIcon({ pool, size = 34 }: { pool: PoolView; size?: number }) {
         : type === "enc"
           ? "linear-gradient(135deg,#6d28d9,#9333ea)"
           : "linear-gradient(135deg,#7c3aed,#6d28d9)";
+
   return (
     <div
       style={{
@@ -585,7 +602,8 @@ function AssetIcon({ pool, size = 34 }: { pool: PoolView; size?: number }) {
 // ─── Util Bar ─────────────────────────────────────────────────────────────────
 
 function UtilBar({ pct }: { pct: number }) {
-  const color = pct > 80 ? "#dc2626" : pct > 60 ? "#d97706" : "#059669";
+  const color = pct > 80 ? "#dc2626" : pct > 60 ? "#d97706" : "#059669"
+
   return (
     <div
       style={{
@@ -649,7 +667,7 @@ function IrmChart({ pool }: { pool: PoolView }) {
   const kx = X(optUtil);
   const cx = X(currentUtil);
   const cy = Y(borrowRate(base, s1, s2, optUtil, currentUtil));
-  const midRate = Math.round(maxY / 2);
+  const midRate = Math.round(maxY / 2)
 
   return (
     <svg viewBox={`0 0 ${VW} ${VH}`} width="100%" style={{ display: "block" }}>
@@ -772,7 +790,7 @@ function PoolDetail({
   const s1 = wadToPctNum(pool.slope1Wad);
   const optUtil = wadToPctNum(pool.optimalUtilWad) || 80;
   const s2 = wadToPctNum(pool.slope2Wad);
-  const availLiq = pool.totalDeposits - pool.totalBorrows;
+  const availLiq = pool.totalDeposits - pool.totalBorrows
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1333,7 +1351,7 @@ function PositionSummary({
       value: String(pools.length),
       color: connected ? "#059669" : "#c4c4cc",
     },
-  ];
+  ]
 
   return (
     <div
@@ -1444,8 +1462,9 @@ function PositionSummary({
                   (p) => p.poolAddress.toBase58() === pos.pool_address,
                 );
                 if (!pool) return null;
-                const enc = fhe && getPoolType(pool.symbol) === "enc";
-                return (
+                const enc = fhe && getPoolType(pool.symbol) === "enc"
+
+  return (
                   <div
                     key={i}
                     style={{
@@ -1552,7 +1571,7 @@ function MarketsView({
     display: "grid",
     gridTemplateColumns: "2fr 1.2fr 0.8fr 1.2fr 0.8fr 80px 28px",
     alignItems: "center",
-  };
+  }
 
   return (
     <div
@@ -1781,9 +1800,9 @@ function MarketsView({
                   util > 80 ? "#dc2626" : util > 60 ? "#d97706" : "#059669";
                 const sApy = poolSupplyApy(p);
                 const bApy = poolBorrowApy(p);
-                const availLiq = p.totalDeposits - p.totalBorrows;
+                const availLiq = p.totalDeposits - p.totalBorrows
 
-                return (
+  return (
                   <div
                     key={p.poolAddress.toBase58()}
                     className="pool-row"
@@ -1985,8 +2004,8 @@ function PortfolioView({
   pools: PoolView[];
   positions: PositionRow[];
 }) {
-  if (!connected) {
-    return (
+  if (!connected)
+  return (
       <div
         className="fade-rise"
         style={{
@@ -2029,7 +2048,6 @@ function PortfolioView({
         </div>
       </div>
     );
-  }
 
   const supplied = positions.filter(
     (p) => BigInt(p.deposit_shares || "0") > 0n,
@@ -2133,6 +2151,7 @@ function PortfolioView({
               );
               if (!pool) return null;
               const enc = fhe && getPoolType(pool.symbol) === "enc";
+
               return (
                 <div
                   key={i}
@@ -2250,6 +2269,7 @@ function PortfolioView({
                   (p) => p.poolAddress.toBase58() === pos.pool_address,
                 );
                 if (!pool) return null;
+
                 return (
                   <div
                     key={i}
@@ -2404,6 +2424,7 @@ function FlashView({
   const [amount, setAmount] = useState("");
   const [openEndpoint, setOpenEndpoint] = useState<number | null>(null);
   const pool = pools[selectedIdx] ?? null;
+  const rpc = useSolanaRpc();
   const { flashExecute, status, txSig, errorMsg, reset } = useVeilActions();
 
   const feeBps = pool?.flashFeeBps ?? 9;
@@ -2527,8 +2548,9 @@ function FlashView({
             </div>
             {pools.map((p, i) => {
               const util = poolUtil(p);
-              const avail = p.totalDeposits - p.totalBorrows;
-              return (
+              const avail = p.totalDeposits - p.totalBorrows
+
+  return (
                 <div
                   key={p.poolAddress.toBase58()}
                   style={{
@@ -2826,7 +2848,7 @@ function FlashView({
                       Transaction confirmed
                     </span>
                     <a
-                      href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`}
+                      href={buildExplorerTxUrl(txSig, rpc)}
                       target="_blank"
                       rel="noreferrer"
                       style={{
@@ -2918,8 +2940,9 @@ function FlashView({
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {API_ENDPOINTS.map((ep, i) => {
-            const open = openEndpoint === i;
-            return (
+            const open = openEndpoint === i
+
+  return (
               <div
                 key={i}
                 style={{
@@ -3115,7 +3138,8 @@ function IkaStepIcon({
   const isActive = step === current;
   const isPast = done || idx < curIdx;
   const bg = isPast ? "#059669" : isActive ? "#6d28d9" : "#f0f0f3";
-  const color = isPast || isActive ? "white" : "#9ca3af";
+  const color = isPast || isActive ? "white" : "#9ca3af"
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div
@@ -3156,6 +3180,7 @@ function IkaSetupModal({
   setModal: (m: ModalState | null) => void;
 }) {
   const { publicKey, sendTransaction } = useWallet();
+  const rpc = useSolanaRpc();
   const [step, setStep] = useState<IkaStep>("create");
   const [dwalletAddr, setDwalletAddr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3482,15 +3507,19 @@ function IkaSetupModal({
             }}
           >
             <span style={{ fontWeight: 500 }}>IkaRegister confirmed</span>
-            <span
+            <a
+              href={buildExplorerTxUrl(txSig, rpc)}
+              target="_blank"
+              rel="noreferrer"
               style={{
                 fontFamily: "var(--font-mono),monospace",
                 fontSize: 11,
                 color: "#059669",
+                textDecoration: "none",
               }}
             >
               {txSig} ↗
-            </span>
+            </a>
           </div>
         )}
         <button
@@ -3511,7 +3540,7 @@ function IkaSetupModal({
         </button>
       </div>
     ),
-  };
+  }
 
   return (
     <div
@@ -3644,6 +3673,7 @@ function Modal({
   const [amount, setAmount] = useState("");
   const [encPos, setEncPos] = useState(fhe && poolType === "enc");
   const [chain, setChain] = useState(poolType === "ika" ? "ika" : "solana");
+  const rpc = useSolanaRpc();
   const { deposit, withdraw, borrow, repay, status, txSig, errorMsg, reset } =
     useVeilActions();
 
@@ -3927,7 +3957,7 @@ function Modal({
           >
             <span style={{ fontWeight: 500 }}>Transaction confirmed</span>
             <a
-              href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`}
+              href={buildExplorerTxUrl(txSig, rpc)}
               target="_blank"
               rel="noreferrer"
               style={{
@@ -4042,6 +4072,7 @@ function Modal({
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function DAppPage() {
+  const rpc = useSolanaRpc();
   const { publicKey } = useWallet();
   const connected = !!publicKey;
   const {
@@ -4059,6 +4090,7 @@ export default function DAppPage() {
   });
   const [fhe, setFhe] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [rpcDrawerOpen, setRpcDrawerOpen] = useState(false);
 
   // Fetch user positions from the API
   const [positions, setPositions] = useState<PositionRow[]>([]);
@@ -4081,7 +4113,7 @@ export default function DAppPage() {
 
   useEffect(() => {
     localStorage.setItem("veil_view", view);
-  }, [view]);
+  }, [view])
 
   return (
     <div
@@ -4102,7 +4134,13 @@ export default function DAppPage() {
           opacity: 0.5,
         }}
       />
-      <AppNav view={view} setView={setView} fhe={fhe} setFhe={setFhe} />
+      <AppNav
+        view={view}
+        setView={setView}
+        fhe={fhe}
+        setFhe={setFhe}
+        onOpenRpc={() => setRpcDrawerOpen(true)}
+      />
       <main style={{ flex: 1, paddingTop: 20, position: "relative" }}>
         {view === "markets" && (
           <MarketsView
@@ -4129,6 +4167,10 @@ export default function DAppPage() {
           <FlashView connected={connected} fhe={fhe} pools={pools} />
         )}
       </main>
+      <RpcSwitcher
+        open={rpcDrawerOpen}
+        onClose={() => setRpcDrawerOpen(false)}
+      />
       {modal && modal.type === "ika-setup" ? (
         <IkaSetupModal pool={modal.pool} setModal={setModal} />
       ) : (

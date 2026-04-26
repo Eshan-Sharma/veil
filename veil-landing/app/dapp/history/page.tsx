@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 
 type TxRow = {
   id: number;
@@ -40,6 +42,7 @@ const STATUS_TONE: Record<string, { fg: string; bg: string }> = {
 
 export default function HistoryPage() {
   const { publicKey } = useWallet();
+  const rpc = useSolanaRpc();
   const [rows, setRows] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -52,7 +55,7 @@ export default function HistoryPage() {
       .then((d: { transactions: TxRow[] }) => setRows(d.transactions ?? []))
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [publicKey]);
+  }, [publicKey])
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -92,6 +95,7 @@ export default function HistoryPage() {
             {rows.map((r) => {
               const tone = STATUS_TONE[r.status] ?? STATUS_TONE.pending;
               const actionColor = ACTION_COLOR[r.action] ?? "#374151";
+
               return (
                 <div key={r.signature} style={tableRow}>
                   <span style={{ ...mono, color: "#9ca3af", fontSize: 11 }}>
@@ -109,7 +113,7 @@ export default function HistoryPage() {
                     width: "fit-content",
                   }}>{r.status.toUpperCase()}</span>
                   <a
-                    href={`https://explorer.solana.com/tx/${r.signature}?cluster=devnet`}
+                    href={buildExplorerTxUrl(r.signature, rpc)}
                     target="_blank" rel="noreferrer"
                     style={{ ...mono, color: "#2563eb", textDecoration: "none" }}
                   >{r.signature.slice(0, 8)}…{r.signature.slice(-4)} ↗</a>

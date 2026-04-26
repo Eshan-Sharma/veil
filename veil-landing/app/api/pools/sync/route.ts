@@ -8,12 +8,14 @@ export const runtime = "nodejs";
 /** Pulls a pool's on-chain state and upserts it into the DB cache.
  *  Public — anyone can call this (just refreshes our cache). */
 export async function POST(req: Request) {
-  let body: { pool_address?: string; symbol?: string };
+  let body: { pool_address?: string; symbol?: string; rpc?: string };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const poolAddr = body.pool_address;
   if (!poolAddr) return NextResponse.json({ error: "pool_address required" }, { status: 400 });
 
-  const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
+  const rpc = typeof body.rpc === "string" && /^https?:\/\//.test(body.rpc)
+    ? body.rpc
+    : process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
   const conn = new Connection(rpc, "confirmed");
   let info;
   try { info = await conn.getAccountInfo(new PublicKey(poolAddr)); }

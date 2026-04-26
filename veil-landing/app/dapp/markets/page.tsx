@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { usePools, type PoolView } from "@/lib/veil/usePools";
 import { useVeilActions } from "../hooks/useVeilActions";
 
@@ -15,6 +17,7 @@ function wadToPct(v: bigint | null): string {
 
 export default function MarketsPage() {
   const { publicKey } = useWallet();
+  const rpc = useSolanaRpc();
   const { pools, loading, error, refresh } = usePools();
   const actions = useVeilActions();
 
@@ -113,7 +116,7 @@ export default function MarketsPage() {
                actions.errorMsg ?? "Failed"}
             </span>
             {actions.status === "success" && actions.txSig && (
-              <a href={`https://explorer.solana.com/tx/${actions.txSig}?cluster=devnet`} target="_blank" rel="noreferrer" style={{ ...mono, color: "#059669", textDecoration: "none" }}>
+              <a href={buildExplorerTxUrl(actions.txSig, rpc)} target="_blank" rel="noreferrer" style={{ ...mono, color: "#059669", textDecoration: "none" }}>
                 {actions.txSig.slice(0, 10)}… ↗
               </a>
             )}
@@ -157,7 +160,8 @@ function ActionBtn({ kind, onClick, children }: { kind: "deposit" | "borrow" | "
     repay:    { bg: "#f0fdf4", fg: "#15803d", bd: "#bbf7d0" },
     withdraw: { bg: "#faf5ff", fg: "#6b21a8", bd: "#e9d5ff" },
   };
-  const c = colors[kind];
+  const c = colors[kind]
+
   return (
     <button onClick={onClick} style={{
       padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,

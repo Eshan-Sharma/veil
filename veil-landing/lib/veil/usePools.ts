@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 
 export type ApiPool = {
   pool_address: string;
@@ -97,6 +98,7 @@ export function usePools(): {
   error: string | null;
   refresh: () => void;
 } {
+  const { endpoint } = useSolanaRpc();
   const [pools, setPools] = useState<PoolView[]>(FALLBACK_POOLS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +108,7 @@ export function usePools(): {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch("/api/pools", { cache: "no-store" })
+    fetch(`/api/pools?rpc=${encodeURIComponent(endpoint)}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((data: { pools: ApiPool[] }) => {
         if (cancelled) return;
@@ -115,8 +117,8 @@ export function usePools(): {
       })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [tick]);
 
+    return () => { cancelled = true; };
+  }, [endpoint, tick]);
   return { pools, loading, error, refresh: () => setTick((t) => t + 1) };
 }
