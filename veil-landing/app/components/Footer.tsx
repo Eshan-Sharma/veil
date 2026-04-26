@@ -1,4 +1,9 @@
 export const Footer = () => {
+  const docsUrl =
+    process.env.NEXT_PUBLIC_DOCS_URL ??
+    (process.env.NODE_ENV === "development"
+      ? "http://localhost:3001"
+      : "https://docsveil.vercel.app");
 
   return (
     <footer className="relative border-t border-zinc-200/80 bg-white/50 backdrop-blur">
@@ -24,11 +29,11 @@ export const Footer = () => {
             ["How it works", "#how"],
             ["Architecture", "#architecture"],
             ["Privacy", "#privacy"],
-            ["Security", "#security"],
+            ["Security", `${docsUrl}/security`],
           ]} />
           <Column title="Resources" items={[
             ["GitHub", "https://github.com/eshan-sharma/veil"],
-            ["Whitepaper", `${process.env.NEXT_PUBLIC_DOCS_URL ?? "https://docsveil.vercel.app"}/whitepaper`],
+            ["Whitepaper", `${docsUrl}/whitepaper`],
             ["Architecture (SVG)", "https://github.com/eshan-sharma/veil/blob/main/docs/veil_architecture.svg"],
             ["Personas", "https://github.com/eshan-sharma/veil/blob/main/docs/user_persona.md"],
           ]} />
