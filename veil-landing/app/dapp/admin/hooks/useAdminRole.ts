@@ -20,8 +20,8 @@ export function useAdminRole(): { role: AdminRole; loading: boolean; refresh: ()
       .then((r) => { if (!cancelled) setRole(r); })
       .catch(() => { if (!cancelled) setRole(null); })
       .finally(() => { if (!cancelled) setLoading(false); });
+
     return () => { cancelled = true; };
   }, [publicKey, tick]);
-
   return { role, loading, refresh: () => setTick((t) => t + 1) };
 }

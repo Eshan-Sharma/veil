@@ -56,6 +56,7 @@ function readI64LE(buf: Buffer, offset: number): bigint {
 function readU128LE(buf: Buffer, offset: number): bigint {
   const lo = buf.readBigUInt64LE(offset);
   const hi = buf.readBigUInt64LE(offset + 8);
+
   return (hi << 64n) | lo;
 }
 
@@ -140,6 +141,7 @@ export function borrowDebt(
   snapshotIndex: bigint
 ): bigint {
   if (snapshotIndex === 0n) return 0n;
+
   return (principal * currentBorrowIndex) / snapshotIndex;
 }
 
@@ -155,6 +157,6 @@ export function healthFactor(
   const collateral = sharesToTokens(depositShares, supplyIndex);
   const debt = borrowDebt(borrowPrincipal, currentBorrowIndex, snapshotIndex);
   if (debt === 0n) return WAD;
-  // hf = collateral * liqThreshold / debt  (WAD-scaled)
+  // hf = collateral * liqThreshold / debt (WAD-scaled)
   return (collateral * liquidationThreshold) / debt;
 }

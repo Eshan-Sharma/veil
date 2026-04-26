@@ -34,7 +34,6 @@ const qs = [
 ];
 
 export const FAQ = () => {
-
   return (
     <section id="faq" className="relative">
       <div className="mx-auto max-w-5xl px-6 py-28 sm:py-36">

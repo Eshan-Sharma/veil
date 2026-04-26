@@ -48,7 +48,6 @@ export async function fetchPythPrices(): Promise<PythPrices> {
     const exp = entry.price.expo;
     out[poolId] = raw * Math.pow(10, exp);
   }
-
   return out;
 }
 

@@ -168,7 +168,6 @@ export function ikaSignIx(
     u8(msgApprovalBump),
     u8(cpiAuthorityBump)
   );
-
   return new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [

@@ -26,11 +26,11 @@ export function usePythPrices(intervalMs = 10_000): PythPrices {
 
     load();
     const timer = setInterval(load, intervalMs);
+
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
   }, [intervalMs]);
-
   return prices;
 }

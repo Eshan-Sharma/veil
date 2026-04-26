@@ -46,7 +46,6 @@ const personas = [
 ];
 
 export const Personas = () => {
-
   return (
     <section id="personas" className="relative overflow-hidden">
       <div className="mx-auto max-w-7xl px-6 py-28 sm:py-36">

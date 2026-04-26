@@ -1,5 +1,4 @@
 export const Problem = () => {
-
   return (
     <section id="problem" className="relative overflow-hidden bg-zinc-950 text-white">
       <div aria-hidden className="absolute inset-0 opacity-[0.18]" style={{

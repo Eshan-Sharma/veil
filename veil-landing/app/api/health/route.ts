@@ -48,7 +48,6 @@ export async function GET() {
 
   const overall = db.ok && rpc.ok && counts.ok;
   const status = overall ? 200 : 503;
-
   return NextResponse.json({
     status: overall ? "ok" : "degraded",
     timestamp: new Date().toISOString(),

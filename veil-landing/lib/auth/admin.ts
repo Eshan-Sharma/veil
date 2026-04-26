@@ -79,6 +79,5 @@ export async function verifyAdminRequest(params: {
     ` as Array<{ "?column?": number }>;
     return { ok: false, error: noncesLeft.length === 0 ? "nonce invalid or expired" : "not authorized" };
   }
-
   return { ok: true, role: row.role };
 }

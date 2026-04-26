@@ -74,7 +74,6 @@ export function buildInitializePoolTx(params: {
       0 /* vault_bump — informational only; the on-chain code re-derives */
     )
   );
-
   return { tx, pool, poolAuthority, vault, poolBump, authorityBump };
 }
 

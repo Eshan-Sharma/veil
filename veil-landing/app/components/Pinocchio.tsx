@@ -5,7 +5,7 @@ export const Pinocchio = () => {
     { op: "health_check", anchor: 14200, pinocchio: 3900 },
     { op: "liquidate", anchor: 51200, pinocchio: 17400 },
   ];
-  const max = Math.max(...rows.map((r) => r.anchor));
+  const max = Math.max(...rows.map((r) => r.anchor))
 
   return (
     <section className="relative">

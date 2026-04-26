@@ -79,6 +79,5 @@ export async function findMessageApproval(
   if (isNonZero) {
     seeds.push(Buffer.from(messageMetadataDigest));
   }
-
   return PublicKey.findProgramAddress(seeds, IKA_PROGRAM_PK);
 }

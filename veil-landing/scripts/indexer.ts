@@ -64,6 +64,7 @@ function computeHF(
   if (snapshotIndex === 0n) return 1n << 127n;
   const debt = (borrowPrincipal * currentBorrowIndex) / snapshotIndex;
   if (debt === 0n) return 1n << 127n;
+
   return (collateral * liquidationThreshold) / debt;
 }
 

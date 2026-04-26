@@ -35,7 +35,7 @@ export function AuditLogPanel() {
       setLoading(false);
     }
   }
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); }, [])
 
   return (
     <div style={{ maxWidth: 760 }}>
@@ -67,8 +67,9 @@ export function AuditLogPanel() {
               <span>TARGET</span>
             </div>
             {entries.map((e) => {
-              const tone = ACTION_TONE[e.action] ?? { fg: "#374151", bg: "#f3f4f6" };
-              return (
+              const tone = ACTION_TONE[e.action] ?? { fg: "#374151", bg: "#f3f4f6" }
+
+  return (
                 <div key={e.id} style={{ display: "grid", gridTemplateColumns: "150px 130px 1fr 1fr", padding: "10px 18px", borderBottom: "1px solid #f3f4f6", alignItems: "center" }}>
                   <span style={{ fontFamily: "var(--font-mono),monospace", fontSize: 11, color: "#9ca3af" }}>
                     {new Date(e.created_at).toLocaleString()}

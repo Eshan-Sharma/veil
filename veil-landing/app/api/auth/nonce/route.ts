@@ -25,6 +25,7 @@ async function exceedsRateLimit(bucket: string, max: number): Promise<boolean> {
      WHERE bucket = ${bucket}
        AND ts > now() - make_interval(secs => ${RATE_LIMIT_WINDOW})
   ` as Array<{ n: number }>;
+
   return (rows[0]?.n ?? 0) >= max;
 }
 
@@ -73,7 +74,6 @@ export async function POST(req: Request) {
     recordRequest(`pubkey:${pubkey}`),
     recordRequest(`ip:${ip}`),
   ]);
-
   return NextResponse.json({
     nonce,
     message: buildAuthMessage(nonce, action, origin),
