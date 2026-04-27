@@ -123,6 +123,9 @@ impl Withdraw {
             let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
             pos.verify_binding(accounts[0].address(), accounts[3].address())?;
+            if pos.cross_collateral != 0 {
+                return Err(LendError::CrossCollateralActive.into());
+            }
             compute_withdrawal_terms(pool, pos, self.shares)?
         };
 

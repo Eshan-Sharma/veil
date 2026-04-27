@@ -43,9 +43,34 @@ pub const FLASH_LP_SHARE_BPS: u64 = 90; // 90% of the fee
 /// Multiply two WAD-scaled values: (a × b) / WAD
 #[inline(always)]
 pub fn wad_mul(a: u128, b: u128) -> Result<u128, ProgramError> {
-    a.checked_mul(b)
-        .map(|x| x / WAD)
-        .ok_or(ProgramError::ArithmeticOverflow)
+    match a.checked_mul(b) {
+        Some(product) => Ok(product / WAD),
+        None => {
+            // Fallback: divide first to avoid overflow.
+            // wad_mul(a, b) = a * b / WAD
+            // = (a / WAD) * b + (a % WAD) * b / WAD
+            let quotient = a / WAD;
+            let remainder = a % WAD;
+            let main = quotient.checked_mul(b)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            // remainder < WAD (1e18) and b < u128::MAX, so remainder * b may
+            // still overflow; use the same split if needed.
+            let rem_part = match remainder.checked_mul(b) {
+                Some(v) => v / WAD,
+                None => {
+                    // b / WAD * remainder + b % WAD * remainder / WAD
+                    let bq = b / WAD;
+                    let br = b % WAD;
+                    bq.checked_mul(remainder)
+                        .ok_or(ProgramError::ArithmeticOverflow)?
+                        .checked_add(br * remainder / WAD)
+                        .ok_or(ProgramError::ArithmeticOverflow)?
+                }
+            };
+            main.checked_add(rem_part)
+                .ok_or(ProgramError::ArithmeticOverflow)
+        }
+    }
 }
 
 /// Divide two WAD-scaled values: (a × WAD) / b
@@ -54,9 +79,31 @@ pub fn wad_div(a: u128, b: u128) -> Result<u128, ProgramError> {
     if b == 0 {
         return Err(ProgramError::InvalidArgument);
     }
-    a.checked_mul(WAD)
-        .map(|x| x / b)
-        .ok_or(ProgramError::ArithmeticOverflow)
+    match a.checked_mul(WAD) {
+        Some(numerator) => Ok(numerator / b),
+        None => {
+            // Fallback: divide first to avoid overflow.
+            // wad_div(a, b) = a * WAD / b
+            // = (a / b) * WAD + (a % b) * WAD / b
+            let quotient = a / b;
+            let remainder = a % b;
+            let main = quotient.checked_mul(WAD)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            let rem_scaled = match remainder.checked_mul(WAD) {
+                Some(v) => v / b,
+                None => {
+                    // Still overflows — scale down remainder further
+                    let half_wad = WAD / 2;
+                    let part1 = remainder.checked_mul(half_wad)
+                        .ok_or(ProgramError::ArithmeticOverflow)?
+                        / b;
+                    part1 * 2
+                }
+            };
+            main.checked_add(rem_scaled)
+                .ok_or(ProgramError::ArithmeticOverflow)
+        }
+    }
 }
 
 // ── Kink interest-rate model ─────────────────────────────────────────────────
@@ -217,6 +264,119 @@ pub fn max_borrowable(deposit_balance: u64, ltv: u128) -> Result<u64, ProgramErr
     Ok(max.min(u64::MAX as u128) as u64)
 }
 
+// ── Cross-collateral helpers ─────────────────────────────────────────────────
+
+/// Convert a token amount to WAD-scaled USD value.
+///
+/// result = amount × |oracle_price| × 10^(18 + oracle_expo - token_decimals)
+///
+/// Example: 1_000_000 USDC (6 dec) at price 100_000_000 (expo -8)
+///   = 1_000_000 × 100_000_000 × 10^(18 + (-8) - 6)
+///   = 1_000_000 × 100_000_000 × 10^4
+///   = 1_000_000_000_000_000_000 = 1.0 WAD = $1.00
+pub fn token_to_usd_wad(
+    amount: u64,
+    oracle_price: i64,
+    oracle_expo: i32,
+    token_decimals: u8,
+) -> Result<u128, ProgramError> {
+    if amount == 0 || oracle_price <= 0 {
+        return Ok(0);
+    }
+    let price = oracle_price as u128;
+    let base = (amount as u128)
+        .checked_mul(price)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+    // scale_exp = 18 + oracle_expo - token_decimals
+    let scale_exp: i32 = 18 + oracle_expo - (token_decimals as i32);
+
+    if scale_exp >= 0 {
+        let factor = 10u128
+            .checked_pow(scale_exp as u32)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        base.checked_mul(factor)
+            .ok_or(ProgramError::ArithmeticOverflow)
+    } else {
+        let divisor = 10u128
+            .checked_pow((-scale_exp) as u32)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        Ok(base / divisor)
+    }
+}
+
+/// Cross-collateral health factor.
+///
+/// HF = weighted_collateral_usd / total_debt_usd  (both WAD-scaled USD)
+///
+/// Since both inputs are WAD-scaled, we compute HF as a WAD-scaled ratio:
+///   HF = (collateral × WAD) / debt
+///
+/// To avoid u128 overflow when collateral is large (e.g., $10,000 = 1e22),
+/// we divide first then scale: HF = (collateral / debt) × WAD + remainder.
+///
+/// Returns `u128::MAX` when debt is zero.
+pub fn cross_health_factor(
+    weighted_collateral_usd: u128,
+    total_debt_usd: u128,
+) -> Result<u128, ProgramError> {
+    if total_debt_usd == 0 {
+        return Ok(u128::MAX);
+    }
+    wad_div(weighted_collateral_usd, total_debt_usd)
+}
+
+/// Max additional USD (WAD-scaled) a user may borrow given cross-collateral.
+///
+/// `ltv_weighted_collateral_usd` is already multiplied by each pool's LTV.
+/// Returns 0 if existing debt exceeds the cap.
+pub fn cross_max_borrowable_usd(
+    ltv_weighted_collateral_usd: u128,
+    existing_debt_usd: u128,
+) -> Result<u128, ProgramError> {
+    Ok(ltv_weighted_collateral_usd.saturating_sub(existing_debt_usd))
+}
+
+/// Convert a USD WAD amount back to token amount.
+///
+/// Inverse of `token_to_usd_wad`:
+/// tokens = usd_wad / (|oracle_price| × 10^(18 + oracle_expo - token_decimals))
+pub fn usd_wad_to_tokens(
+    usd_wad: u128,
+    oracle_price: i64,
+    oracle_expo: i32,
+    token_decimals: u8,
+) -> Result<u64, ProgramError> {
+    if usd_wad == 0 || oracle_price <= 0 {
+        return Ok(0);
+    }
+    let price = oracle_price as u128;
+    let scale_exp: i32 = 18 + oracle_expo - (token_decimals as i32);
+
+    let tokens = if scale_exp >= 0 {
+        let factor = 10u128
+            .checked_pow(scale_exp as u32)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        let denom = price
+            .checked_mul(factor)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        if denom == 0 {
+            return Ok(0);
+        }
+        usd_wad / denom
+    } else {
+        let factor = 10u128
+            .checked_pow((-scale_exp) as u32)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        usd_wad
+            .checked_mul(factor)
+            .ok_or(ProgramError::ArithmeticOverflow)?
+            / price
+    };
+
+    Ok(tokens.min(u64::MAX as u128) as u64)
+}
+
 // ── Flash loan helpers ────────────────────────────────────────────────────────
 
 /// Fee charged on a flash loan: amount × fee_bps / 10_000
@@ -285,8 +445,17 @@ mod tests {
 
     #[test]
     fn wad_mul_overflow_returns_err() {
-        // u128::MAX × 2 overflows during checked_mul
-        assert!(wad_mul(u128::MAX, 2).is_err());
+        // u128::MAX × u128::MAX overflows even with fallback
+        assert!(wad_mul(u128::MAX, u128::MAX).is_err());
+    }
+
+    #[test]
+    fn wad_mul_large_values_succeed() {
+        // Large values that previously overflowed now use the fallback path
+        let result = wad_mul(u128::MAX, 2).unwrap();
+        // u128::MAX * 2 / WAD ≈ (u128::MAX / WAD) * 2
+        let expected = (u128::MAX / WAD) * 2 + (u128::MAX % WAD) * 2 / WAD;
+        assert_eq!(result, expected);
     }
 
     // ── wad_div ──────────────────────────────────────────────────────────────
@@ -652,5 +821,126 @@ mod tests {
     fn max_borrowable_full_ltv() {
         // LTV = WAD (100%) → borrowable = deposit
         assert_eq!(max_borrowable(1_000, WAD).unwrap(), 1_000);
+    }
+
+    // ── token_to_usd_wad ────────────────────────────────────────────────────
+
+    #[test]
+    fn token_to_usd_zero_amount() {
+        assert_eq!(token_to_usd_wad(0, 100_000_000, -8, 6).unwrap(), 0);
+    }
+
+    #[test]
+    fn token_to_usd_negative_price_returns_zero() {
+        assert_eq!(token_to_usd_wad(1_000_000, -1, -8, 6).unwrap(), 0);
+    }
+
+    #[test]
+    fn token_to_usd_usdc_one_dollar() {
+        // 1 USDC = 1_000_000 units, price = $1.00 (100_000_000 with expo -8), 6 decimals
+        // = 1_000_000 × 100_000_000 × 10^(18-8-6) = 1e14 × 1e4 = 1e18 = WAD
+        let usd = token_to_usd_wad(1_000_000, 100_000_000, -8, 6).unwrap();
+        assert_eq!(usd, WAD);
+    }
+
+    #[test]
+    fn token_to_usd_sol_at_150() {
+        // 1 SOL = 1_000_000_000 units (9 dec), price = $150 (15_000_000_000 with expo -8)
+        // = 1e9 × 15e9 × 10^(18-8-9) = 15e18 × 10^1 = 150 × WAD
+        let usd = token_to_usd_wad(1_000_000_000, 15_000_000_000, -8, 9).unwrap();
+        assert_eq!(usd, 150 * WAD);
+    }
+
+    #[test]
+    fn token_to_usd_btc_at_100k() {
+        // 1 BTC = 100_000_000 units (8 dec), price = $100,000 (10_000_000_000_000 with expo -8)
+        // = 1e8 × 1e13 × 10^(18-8-8) = 1e21 × 1e2 = 1e23 = 100_000 × WAD
+        let usd = token_to_usd_wad(100_000_000, 10_000_000_000_000, -8, 8).unwrap();
+        assert_eq!(usd, 100_000 * WAD);
+    }
+
+    #[test]
+    fn token_to_usd_fractional_sol() {
+        // 0.5 SOL at $150 = $75
+        let usd = token_to_usd_wad(500_000_000, 15_000_000_000, -8, 9).unwrap();
+        assert_eq!(usd, 75 * WAD);
+    }
+
+    // ── cross_health_factor ─────────────────────────────────────────────────
+
+    #[test]
+    fn cross_hf_no_debt_returns_max() {
+        assert_eq!(cross_health_factor(100 * WAD, 0).unwrap(), u128::MAX);
+    }
+
+    #[test]
+    fn cross_hf_equal_collateral_and_debt() {
+        // weighted_collateral = debt → HF = 1.0
+        let hf = cross_health_factor(WAD * 100, WAD * 100).unwrap();
+        assert_eq!(hf, WAD);
+    }
+
+    #[test]
+    fn cross_hf_healthy() {
+        // $200 weighted collateral, $100 debt → HF = 2.0
+        let hf = cross_health_factor(200 * WAD, 100 * WAD).unwrap();
+        assert_eq!(hf, 2 * WAD);
+    }
+
+    #[test]
+    fn cross_hf_unhealthy() {
+        // $80 weighted collateral, $100 debt → HF = 0.8
+        let hf = cross_health_factor(80 * WAD, 100 * WAD).unwrap();
+        assert_eq!(hf, WAD * 80 / 100);
+    }
+
+    // ── cross_max_borrowable_usd ────────────────────────────────────────────
+
+    #[test]
+    fn cross_max_borrow_no_existing_debt() {
+        assert_eq!(cross_max_borrowable_usd(750 * WAD, 0).unwrap(), 750 * WAD);
+    }
+
+    #[test]
+    fn cross_max_borrow_with_existing_debt() {
+        assert_eq!(cross_max_borrowable_usd(750 * WAD, 500 * WAD).unwrap(), 250 * WAD);
+    }
+
+    #[test]
+    fn cross_max_borrow_debt_exceeds_cap() {
+        assert_eq!(cross_max_borrowable_usd(750 * WAD, 800 * WAD).unwrap(), 0);
+    }
+
+    // ── usd_wad_to_tokens ───────────────────────────────────────────────────
+
+    #[test]
+    fn usd_to_tokens_zero() {
+        assert_eq!(usd_wad_to_tokens(0, 100_000_000, -8, 6).unwrap(), 0);
+    }
+
+    #[test]
+    fn usd_to_tokens_usdc_one_dollar() {
+        // $1.00 WAD at USDC price → 1_000_000 units
+        let tokens = usd_wad_to_tokens(WAD, 100_000_000, -8, 6).unwrap();
+        assert_eq!(tokens, 1_000_000);
+    }
+
+    #[test]
+    fn usd_to_tokens_sol_150_usd() {
+        // $150 WAD at SOL $150 → 1 SOL = 1_000_000_000
+        let tokens = usd_wad_to_tokens(150 * WAD, 15_000_000_000, -8, 9).unwrap();
+        assert_eq!(tokens, 1_000_000_000);
+    }
+
+    #[test]
+    fn token_to_usd_round_trip() {
+        // Convert 2.5 SOL to USD, then back — should recover original amount
+        let amount = 2_500_000_000u64; // 2.5 SOL
+        let price = 15_000_000_000i64; // $150
+        let expo = -8i32;
+        let dec = 9u8;
+        let usd = token_to_usd_wad(amount, price, expo, dec).unwrap();
+        let back = usd_wad_to_tokens(usd, price, expo, dec).unwrap();
+        assert_eq!(back, amount);
     }
 }

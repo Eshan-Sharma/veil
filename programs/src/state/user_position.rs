@@ -14,7 +14,8 @@ Layout (repr C, 144 bytes):
 |  96    |  16  | deposit_index_snapshot  |
 | 112    |  16  | borrow_index_snapshot   |
 | 128    |   1  | bump                    |
-| 129    |  15  | _pad_end                |
+| 129    |   1  | cross_collateral        |
+| 130    |  14  | _pad_end                |
 | 144    |      | (end)                   |
 */
 
@@ -48,7 +49,10 @@ pub struct UserPosition {
     pub borrow_index_snapshot: u128,
 
     pub bump: u8,
-    pub _pad_end: [u8; 15],
+    /// Non-zero when this position is used as collateral for a cross-pool borrow.
+    /// Forces withdrawal through CrossWithdraw (which checks global HF).
+    pub cross_collateral: u8,
+    pub _pad_end: [u8; 14],
 }
 
 impl UserPosition {
