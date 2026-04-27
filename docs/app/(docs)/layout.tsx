@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Head, Search } from 'nextra/components'
+import { Search } from 'nextra/components'
 import { Footer, Layout, Navbar } from 'nextra-theme-docs'
 import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
@@ -66,7 +66,6 @@ export default async function DocsLayout({
 
   return (
     <>
-      <Head />
       <Layout
         navbar={navbar}
         search={<Search />}
