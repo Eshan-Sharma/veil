@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 /* ════════════════════════════════════════════════════════════════════════════
    VEIL PROTOCOL · WHITEPAPER (technical spec — Stellaray-style chassis)
@@ -66,7 +66,7 @@ const TOC: TocItem[] = [
 
 // ─── Reading-progress + active section hooks ────────────────────────────────
 
-function useReadingProgress(): number {
+const useReadingProgress = (): number => {
   const [pct, setPct] = useState(0);
 
   useEffect(() => {
@@ -82,9 +82,9 @@ function useReadingProgress(): number {
   }, []);
 
   return pct;
-}
+};
 
-function useActiveSection(ids: string[]): string {
+const useActiveSection = (ids: string[]): string => {
   const [active, setActive] = useState(ids[0]);
   const lock = useRef(false);
 
@@ -102,15 +102,31 @@ function useActiveSection(ids: string[]): string {
   }, [ids]);
 
   return active;
-}
+};
+
+const useIsMobile = (breakpoint = 768): boolean => {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    setMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+
+  return mobile;
+};
+
+const MobileCtx = createContext(false);
+const useMobile = () => useContext(MobileCtx);
 
 // ─── Atoms ──────────────────────────────────────────────────────────────────
 
-function Mono({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+const Mono = ({ children, style }: { children: ReactNode; style?: CSSProperties }) => {
   return <span style={{ fontFamily: fMono, ...style }}>{children}</span>;
-}
+};
 
-function SectionLabel({ n, tag }: { n: string; tag?: string }) {
+const SectionLabel = ({ n, tag }: { n: string; tag?: string }) => {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 14,
@@ -126,24 +142,26 @@ function SectionLabel({ n, tag }: { n: string; tag?: string }) {
       <span style={{ color: t.fade, fontSize: 10 }}>{n}.0</span>
     </div>
   );
-}
+};
 
-function H2({ id, n, children, tag }: { id: string; n: string; children: ReactNode; tag?: string }) {
+const H2 = ({ id, n, children, tag }: { id: string; n: string; children: ReactNode; tag?: string }) => {
+  const m = useMobile();
+
   return (
-    <section id={id} style={{ scrollMarginTop: 90, marginTop: 64 }}>
+    <section id={id} style={{ scrollMarginTop: 90, marginTop: m ? 40 : 64 }}>
       <SectionLabel n={n} tag={tag} />
       <h2 style={{
         fontFamily: fSerif, fontWeight: 400,
-        fontSize: 38, lineHeight: 1.1, letterSpacing: "-0.022em",
+        fontSize: m ? 26 : 38, lineHeight: 1.1, letterSpacing: "-0.022em",
         color: t.ink, margin: "0 0 22px",
       }}>
         {children}
       </h2>
     </section>
   );
-}
+};
 
-function H3({ children, n }: { children: ReactNode; n?: string }) {
+const H3 = ({ children, n }: { children: ReactNode; n?: string }) => {
   return (
     <h3 style={{
       fontFamily: fSans, fontWeight: 600,
@@ -154,22 +172,22 @@ function H3({ children, n }: { children: ReactNode; n?: string }) {
       {children}
     </h3>
   );
-}
+};
 
-function P({ children }: { children: ReactNode }) {
+const P = ({ children }: { children: ReactNode }) => {
   return (
     <p style={{
       fontFamily: fSans, fontSize: 15, lineHeight: 1.75,
       color: t.text, margin: "0 0 16px", textWrap: "pretty" as const,
     }}>{children}</p>
   );
-}
+};
 
-function Em({ children }: { children: ReactNode }) {
+const Em = ({ children }: { children: ReactNode }) => {
   return <em style={{ fontFamily: fSerif, fontStyle: "italic", color: t.ink2 }}>{children}</em>;
-}
+};
 
-function Code({ children }: { children: ReactNode }) {
+const Code = ({ children }: { children: ReactNode }) => {
   return (
     <code style={{
       fontFamily: fMono, fontSize: 12.5,
@@ -177,9 +195,9 @@ function Code({ children }: { children: ReactNode }) {
       color: t.ink, border: `1px solid ${t.hairSoft}`,
     }}>{children}</code>
   );
-}
+};
 
-function Pre({ children, label }: { children: ReactNode; label?: string }) {
+const Pre = ({ children, label }: { children: ReactNode; label?: string }) => {
   return (
     <div style={{ margin: "16px 0" }}>
       {label && (
@@ -200,9 +218,10 @@ function Pre({ children, label }: { children: ReactNode; label?: string }) {
       }}>{children}</pre>
     </div>
   );
-}
+};
 
-function Note({ kind = "note", children }: { kind?: "note" | "warn" | "secure" | "open"; children: ReactNode }) {
+const Note = ({ kind = "note", children }: { kind?: "note" | "warn" | "secure" | "open"; children: ReactNode }) => {
+  const m = useMobile();
   const tone = {
     note:   { fg: t.ink,  border: t.line, label: "NOTE" },
     warn:   { fg: t.warn, border: t.warn, label: "ATTN" },
@@ -211,35 +230,37 @@ function Note({ kind = "note", children }: { kind?: "note" | "warn" | "secure" |
   }[kind];
   return (
     <div style={{
-      borderLeft: `3px solid ${tone.border}`, padding: "10px 16px",
+      borderLeft: `3px solid ${tone.border}`, padding: m ? "10px 12px" : "10px 16px",
       margin: "20px 0", background: t.card,
       fontFamily: fSans, fontSize: 14, lineHeight: 1.7, color: t.text,
-      display: "grid", gridTemplateColumns: "60px 1fr", gap: 10,
+      display: m ? "block" : "grid", gridTemplateColumns: "60px 1fr", gap: 10,
     }}>
       <span style={{
         fontFamily: fMono, fontSize: 10, letterSpacing: ".18em",
         color: tone.fg, fontWeight: 700, textTransform: "uppercase",
-        paddingTop: 2,
+        paddingTop: 2, display: "block", marginBottom: m ? 6 : 0,
       }}>[{tone.label}]</span>
       <div>{children}</div>
     </div>
   );
-}
+};
 
-function Numbered({ no, title, children }: { no: string; title: string; children: ReactNode }) {
+const Numbered = ({ no, title, children }: { no: string; title: string; children: ReactNode }) => {
+  const m = useMobile();
+
   return (
     <div style={{
-      display: "grid", gridTemplateColumns: "70px 1fr", gap: 18,
+      display: m ? "block" : "grid", gridTemplateColumns: "70px 1fr", gap: m ? 6 : 18,
       padding: "18px 0", borderBottom: `1px solid ${t.hairSoft}`,
     }}>
       <div style={{
-        fontFamily: fMono, fontSize: 30, fontWeight: 600,
+        fontFamily: fMono, fontSize: m ? 20 : 30, fontWeight: 600,
         color: t.ink, lineHeight: 1, paddingTop: 4,
-        letterSpacing: "-0.01em",
+        letterSpacing: "-0.01em", marginBottom: m ? 6 : 0,
       }}>{no}</div>
       <div>
         <div style={{
-          fontFamily: fSans, fontSize: 16, fontWeight: 600,
+          fontFamily: fSans, fontSize: m ? 15 : 16, fontWeight: 600,
           color: t.ink, marginBottom: 4, letterSpacing: "-0.005em",
         }}>{title}</div>
         <div style={{
@@ -248,10 +269,11 @@ function Numbered({ no, title, children }: { no: string; title: string; children
       </div>
     </div>
   );
-}
+};
 
-function Table({ head, rows, monoCol }: { head: string[]; rows: ReactNode[][]; monoCol?: number[] }) {
+const Table = ({ head, rows, monoCol }: { head: string[]; rows: ReactNode[][]; monoCol?: number[] }) => {
   const isMono = (i: number) => monoCol?.includes(i);
+
   return (
     <div style={{ margin: "18px 0", overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: fSans, fontSize: 13 }}>
@@ -285,9 +307,9 @@ function Table({ head, rows, monoCol }: { head: string[]; rows: ReactNode[][]; m
       </table>
     </div>
   );
-}
+};
 
-function Pill({ tone, children }: { tone: "ok" | "warn" | "err" | "info" | "neutral"; children: ReactNode }) {
+const Pill = ({ tone, children }: { tone: "ok" | "warn" | "err" | "info" | "neutral"; children: ReactNode }) => {
   const c = {
     ok:      { fg: t.ok,   bg: "#dcefde",  bd: "#bdd9be" },
     warn:    { fg: t.warn, bg: "#f3e3cb",  bd: "#e0c693" },
@@ -304,15 +326,18 @@ function Pill({ tone, children }: { tone: "ok" | "warn" | "err" | "info" | "neut
       fontWeight: 700,
     }}>{children}</span>
   );
-}
+};
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export const WhitepaperShell = () => {
   const pct = useReadingProgress();
   const active = useActiveSection(TOC.map((x) => x.id));
+  const mobile = useIsMobile();
+  const [tocOpen, setTocOpen] = useState(false);
 
   return (
+    <MobileCtx.Provider value={mobile}>
     <div style={{
       background: t.paper, minHeight: "100vh", color: t.ink,
       backgroundImage:
@@ -334,73 +359,103 @@ export const WhitepaperShell = () => {
         borderBottom: `1px solid ${t.hair}`, zIndex: 50,
       }}>
         <div style={{
-          maxWidth: 1180, margin: "0 auto", padding: "0 28px",
+          maxWidth: 1180, margin: "0 auto", padding: mobile ? "0 16px" : "0 28px",
           height: 56, display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: mobile ? 12 : 24 }}>
             <Link href="/" style={navLinkStyle}>← DOCS</Link>
-            <span style={{ width: 1, height: 14, background: t.hair }} />
-            <span style={{ ...navLinkStyle, fontWeight: 700, letterSpacing: ".30em" }}>VEIL · SPEC</span>
-            <Pill tone="info">RFC&nbsp;v0.1</Pill>
+            {!mobile && <span style={{ width: 1, height: 14, background: t.hair }} />}
+            {!mobile && <span style={{ ...navLinkStyle, fontWeight: 700, letterSpacing: ".30em" }}>VEIL · SPEC</span>}
+            {!mobile && <Pill tone="info">RFC&nbsp;v0.1</Pill>}
           </div>
-          <nav style={{ display: "flex", alignItems: "center", gap: 22 }}>
-            <a href="#abstract" style={navLinkStyle}>ABSTRACT</a>
-            <a href="#math-spec" style={navLinkStyle}>MATH</a>
-            <a href="#instructions" style={navLinkStyle}>IX</a>
-            <a href="#api" style={navLinkStyle}>API</a>
-            <a href="#threat-model" style={navLinkStyle}>SEC</a>
+          <nav style={{ display: "flex", alignItems: "center", gap: mobile ? 14 : 22 }}>
+            {!mobile && <>
+              <a href="#abstract" style={navLinkStyle}>ABSTRACT</a>
+              <a href="#math-spec" style={navLinkStyle}>MATH</a>
+              <a href="#instructions" style={navLinkStyle}>IX</a>
+              <a href="#api" style={navLinkStyle}>API</a>
+              <a href="#threat-model" style={navLinkStyle}>SEC</a>
+            </>}
+            {mobile && (
+              <button onClick={() => setTocOpen(!tocOpen)} style={{
+                ...navLinkStyle, background: "none", border: `1px solid ${t.hair}`,
+                padding: "4px 10px", cursor: "pointer",
+              }}>{tocOpen ? "CLOSE" : "TOC"}</button>
+            )}
             <span style={{ ...navLinkStyle, color: t.fade, fontVariantNumeric: "tabular-nums" }}>
               {pct.toFixed(0)}%
             </span>
           </nav>
         </div>
+        {/* Mobile TOC dropdown */}
+        {mobile && tocOpen && (
+          <div style={{
+            maxHeight: "60vh", overflowY: "auto",
+            padding: "12px 16px", borderTop: `1px solid ${t.hair}`,
+            background: t.card,
+          }}>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {TOC.map((item) => (
+                <li key={item.id} style={{ margin: "2px 0" }}>
+                  <a href={`#${item.id}`} onClick={() => setTocOpen(false)} style={{
+                    display: "block", textDecoration: "none", padding: "6px 0",
+                    fontFamily: fSans, fontSize: 13, color: active === item.id ? t.ink : t.mute,
+                    fontWeight: active === item.id ? 600 : 400,
+                  }}>
+                    <span style={{ fontFamily: fMono, fontSize: 10.5, color: t.fade, marginRight: 8 }}>{item.n}</span>
+                    {item.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </header>
 
       {/* Hero */}
-      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "56px 28px 0" }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: mobile ? "32px 16px 0" : "56px 28px 0" }}>
         <div style={{
-          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-          fontFamily: fMono, fontSize: 11, letterSpacing: ".22em",
-          color: t.mute, textTransform: "uppercase", marginBottom: 28,
+          display: "flex", alignItems: "center", gap: mobile ? 8 : 12, flexWrap: "wrap",
+          fontFamily: fMono, fontSize: mobile ? 10 : 11, letterSpacing: ".22em",
+          color: t.mute, textTransform: "uppercase", marginBottom: mobile ? 18 : 28,
         }}>
           <span>WHITEPAPER</span><span>·</span>
           <span>v0.1</span><span>·</span>
-          <span>2026-04-25</span><span>·</span>
-          <span>27 MIN READ</span><span>·</span>
-          <span>SOURCE-GROUNDED</span>
+          <span>2026-04-25</span>
+          {!mobile && <><span>·</span><span>27 MIN READ</span><span>·</span><span>SOURCE-GROUNDED</span></>}
         </div>
         <div style={{
-          display: "flex", alignItems: "flex-start", gap: 18, flexWrap: "wrap",
+          display: "flex", alignItems: "flex-start", gap: mobile ? 10 : 18, flexWrap: "wrap",
           marginBottom: 12,
         }}>
           <span style={{
-            fontFamily: fMono, fontSize: 12, color: t.cyan,
+            fontFamily: fMono, fontSize: mobile ? 10 : 12, color: t.cyan,
             border: `1px solid ${t.cyan}`, padding: "3px 10px",
             letterSpacing: ".22em", textTransform: "uppercase",
           }}>PROTOCOL SPEC</span>
           <span style={{
-            fontFamily: fMono, fontSize: 12, color: t.ink,
+            fontFamily: fMono, fontSize: mobile ? 10 : 12, color: t.ink,
             border: `1px solid ${t.line}`, padding: "3px 10px",
             letterSpacing: ".22em", textTransform: "uppercase",
             background: t.card,
           }}>VEIL · v0.1</span>
         </div>
         <h1 style={{
-          fontFamily: fSerif, fontSize: 68, lineHeight: 0.98,
+          fontFamily: fSerif, fontSize: mobile ? 34 : 68, lineHeight: mobile ? 1.08 : 0.98,
           letterSpacing: "-0.034em", fontWeight: 400, color: t.ink,
           margin: 0, maxWidth: 980,
         }}>
-          A privacy-first cross-chain<br />lending protocol on Solana.
+          A privacy-first cross-chain{!mobile && <br />}{mobile ? " " : ""}lending protocol on Solana.
         </h1>
         <div style={{
-          marginTop: 24, fontFamily: fSans, fontSize: 17, lineHeight: 1.7,
+          marginTop: mobile ? 16 : 24, fontFamily: fSans, fontSize: mobile ? 15 : 17, lineHeight: 1.7,
           color: t.text, maxWidth: 760,
         }}>
           Native Bitcoin, Ethereum, and physical-gold collateral via MPC dWallets and Oro/GRAIL settlement. Optional per-position fully-homomorphic privacy. Two-slope kink interest-rate model and Aave-style liquidation engine, implemented in <Code>Pinocchio 0.11.1</Code> for low compute-unit overhead. This document is the canonical engineering specification.
         </div>
         <div style={{
-          marginTop: 44,
-          display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+          marginTop: mobile ? 28 : 44,
+          display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(5, 1fr)",
           borderTop: `1px solid ${t.line}`, borderBottom: `1px solid ${t.hair}`,
         }}>
           <Meta label="AUTHOR"     value="Veil Labs" />
@@ -413,10 +468,11 @@ export const WhitepaperShell = () => {
 
       {/* Body */}
       <div style={{
-        maxWidth: 1180, margin: "0 auto", padding: "44px 28px 96px",
-        display: "grid", gridTemplateColumns: "240px 1fr", gap: 56,
+        maxWidth: 1180, margin: "0 auto", padding: mobile ? "28px 16px 64px" : "44px 28px 96px",
+        display: mobile ? "block" : "grid", gridTemplateColumns: "240px 1fr", gap: 56,
       }}>
-        {/* TOC */}
+        {/* TOC sidebar — hidden on mobile (use dropdown instead) */}
+        {!mobile && (
         <aside style={{ position: "sticky", top: 76, alignSelf: "start" }}>
           <div style={{
             fontFamily: fMono, fontSize: 10.5, letterSpacing: ".22em",
@@ -457,6 +513,7 @@ export const WhitepaperShell = () => {
             <Link href="/security" style={navLinkStyleSmall}>SECURITY</Link>
           </div>
         </aside>
+        )}
 
         {/* Content column */}
         <main style={{ maxWidth: 760 }}>
@@ -1174,28 +1231,32 @@ Nonce: <nonce>`}</Pre>
         </div>
       </footer>
     </div>
+    </MobileCtx.Provider>
   );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function Meta({ label, value, last }: { label: string; value: string; last?: boolean }) {
+const Meta = ({ label, value, last }: { label: string; value: string; last?: boolean }) => {
+  const m = useMobile();
+
   return (
     <div style={{
-      padding: "16px 18px",
-      borderRight: last ? "none" : `1px solid ${t.hair}`,
+      padding: m ? "10px 12px" : "16px 18px",
+      borderRight: last || m ? "none" : `1px solid ${t.hair}`,
+      borderBottom: m && !last ? `1px solid ${t.hairSoft}` : "none",
     }}>
       <div style={{
         fontFamily: fMono, fontSize: 9.5, letterSpacing: ".22em",
-        textTransform: "uppercase", color: t.mute, marginBottom: 6,
+        textTransform: "uppercase", color: t.mute, marginBottom: 4,
       }}>{label}</div>
       <div style={{
-        fontFamily: fMono, fontSize: 12, letterSpacing: ".05em",
+        fontFamily: fMono, fontSize: m ? 11 : 12, letterSpacing: ".05em",
         color: t.ink, fontWeight: 600,
       }}>{value}</div>
     </div>
   );
-}
+};
 
 const navLinkStyle: CSSProperties = {
   fontFamily: fMono, fontSize: 11, letterSpacing: ".22em",
@@ -1207,7 +1268,7 @@ const navLinkStyleSmall: CSSProperties = {
   lineHeight: 1.9,
 };
 
-function CTA({ href, primary, children }: { href: string; primary?: boolean; children: ReactNode }) {
+const CTA = ({ href, primary, children }: { href: string; primary?: boolean; children: ReactNode }) => {
   return (
     <Link href={href} style={{
       display: "inline-flex", alignItems: "center", gap: 8,
@@ -1222,31 +1283,34 @@ function CTA({ href, primary, children }: { href: string; primary?: boolean; chi
       transition: "background 120ms, color 120ms",
     }}>{children}</Link>
   );
-}
+};
 
 // ─── Threat row ─────────────────────────────────────────────────────────────
 
-function Threat({
+const Threat = ({
   id, status, title, children,
 }: {
   id: string;
   status: "ok" | "warn" | "err" | "open";
   title: string;
   children: ReactNode;
-}) {
+}) => {
+  const m = useMobile();
   const statusToTone: Record<string, "ok" | "warn" | "err"> = {
     ok: "ok", warn: "warn", err: "err", open: "err",
   };
   const tone = statusToTone[status];
   const label = { ok: "SAFE", warn: "DEFENSE", err: "OPEN", open: "OPEN" }[status];
+
   return (
     <div style={{
-      display: "grid", gridTemplateColumns: "auto 1fr", gap: 16,
+      display: m ? "block" : "grid", gridTemplateColumns: "auto 1fr", gap: 16,
       padding: "16px 0", borderBottom: `1px solid ${t.hairSoft}`,
     }}>
       <div style={{
-        display: "flex", flexDirection: "column", gap: 6,
-        alignItems: "flex-start", minWidth: 88,
+        display: "flex", flexDirection: m ? "row" : "column", gap: 6,
+        alignItems: m ? "center" : "flex-start", minWidth: m ? undefined : 88,
+        marginBottom: m ? 10 : 0,
       }}>
         <Pill tone={tone}>{label}</Pill>
         <Mono style={{ fontSize: 11, color: t.mute, letterSpacing: ".15em" }}>{id}</Mono>
@@ -1262,4 +1326,4 @@ function Threat({
       </div>
     </div>
   );
-}
+};

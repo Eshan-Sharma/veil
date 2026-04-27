@@ -15,13 +15,7 @@ export async function generateMetadata(props: {
 const components = getMDXComponents()
 const Wrapper =
   components.wrapper ??
-  function DefaultWrapper({
-    children,
-  }: {
-    children: ReactNode
-  }) {
-    return <>{children}</>
-  }
+  (({ children }: { children: ReactNode }) => <>{children}</>)
 
 export default async function Page(props: {
   params: Promise<{ mdxPath?: string[] }>
