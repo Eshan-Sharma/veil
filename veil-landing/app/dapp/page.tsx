@@ -1151,9 +1151,10 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
 
 // ─── Flash Loans View ─────────────────────────────────────────────────────────
 
-const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean; pools: PoolView[] }) => {
+const FlashView = ({ connected, fhe, pools, pythPrices }: { connected: boolean; fhe: boolean; pools: PoolView[]; pythPrices: PythPrices }) => {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [amount, setAmount] = useState("");
+  const [flashInputMode, setFlashInputMode] = useState<"token" | "usd">("token");
   const [openEndpoint, setOpenEndpoint] = useState<number | null>(null);
   const pool = pools[selectedIdx] ?? null;
   const rpc = useSolanaRpc();
@@ -1161,6 +1162,11 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
 
   const feeBps = pool?.flashFeeBps ?? 9;
   const feeRate = feeBps / 10000;
+  const flashPrice = pool ? (pythPrices[pool.id] ?? null) : null;
+  const flashParsed = parseFloat(amount);
+  const flashValid = !isNaN(flashParsed) && flashParsed > 0;
+  const flashTokenAmt = flashInputMode === "token" ? (flashValid ? flashParsed : 0) : (flashValid && flashPrice ? flashParsed / flashPrice : 0);
+  const flashUsdAmt = flashInputMode === "usd" ? (flashValid ? flashParsed : 0) : (flashValid && flashPrice ? flashParsed * flashPrice : 0);
 
   if (pools.length === 0) return (
     <div className="fade-rise empty-state">
@@ -1195,7 +1201,10 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
               <div key={p.poolAddress.toBase58()} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: i < pools.length - 1 ? "1px solid #f7f7f9" : "none" }}>
                 <AssetIcon pool={p} size={22} />
                 <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{p.symbol}</span>
-                <span style={{ fontSize: 13, color: "#5b5b66" }}>{formatBigAmount(avail > 0n ? avail : 0n, p.decimals)}</span>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 13, color: "#5b5b66" }}>{formatBigAmount(avail > 0n ? avail : 0n, p.decimals)}</div>
+                  {(() => { const pr = pythPrices[p.id]; const uv = pr ? tokenToUsd(avail > 0n ? avail : 0n, p.decimals, pr) : null; return uv != null ? <div style={{ fontSize: 11, color: "#059669" }}>{formatUsd(uv)}</div> : null; })()}
+                </div>
                 <span style={{ fontSize: 11, color: util > 70 ? "#dc2626" : util > 50 ? "#d97706" : "#059669", fontWeight: 600, background: util > 70 ? "#fef2f2" : util > 50 ? "#fffbeb" : "#ecfdf5", padding: "2px 7px", borderRadius: 999 }}>{util.toFixed(0)}% used</span>
               </div>
             );
@@ -1216,10 +1225,27 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11.5, color: "#5b5b66", fontWeight: 500, marginBottom: 6 }}>Amount</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#f4f4f6", border: "1px solid #e7e7ec", borderRadius: 12, padding: "10px 14px" }}>
+              {flashInputMode === "usd" && <span style={{ fontSize: 20, fontWeight: 600, color: "#0b0b10" }}>$</span>}
               <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" style={{ flex: 1, background: "none", border: "none", outline: "none", fontSize: 20, fontWeight: 600, color: "#0b0b10", width: 0 }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: "#5b5b66" }}>{pool?.symbol ?? "—"}</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: "#5b5b66" }}>{flashInputMode === "token" ? (pool?.symbol ?? "—") : "USD"}</span>
+              {flashPrice && (
+                <button onClick={() => {
+                  if (flashInputMode === "token" && flashValid) { setFlashInputMode("usd"); setAmount((flashParsed * flashPrice).toFixed(2)); }
+                  else if (flashInputMode === "usd" && flashValid) { setFlashInputMode("token"); setAmount((flashParsed / flashPrice).toFixed(4)); }
+                  else { setFlashInputMode(flashInputMode === "token" ? "usd" : "token"); setAmount(""); }
+                }} title={`Switch to ${flashInputMode === "token" ? "USD" : pool?.symbol}`} style={{ marginLeft: 4, width: 26, height: 26, borderRadius: 999, border: "1px solid #e7e7ec", background: "white", cursor: "pointer", display: "grid", placeItems: "center", fontSize: 12, color: "#5b5b66", flexShrink: 0 }}>⇄</button>
+              )}
             </div>
-            {pool && <div style={{ fontSize: 11.5, color: "#5b5b66", marginTop: 4 }}>Available: {formatBigAmount(pool.totalDeposits - pool.totalBorrows > 0n ? pool.totalDeposits - pool.totalBorrows : 0n, pool.decimals)} · Fee: {amount ? (parseFloat(amount) * feeRate).toFixed(4) : 0} {pool.symbol}</div>}
+            {pool && (
+              <div style={{ fontSize: 11.5, color: "#5b5b66", marginTop: 4, display: "flex", justifyContent: "space-between" }}>
+                <span>Available: {formatBigAmount(pool.totalDeposits - pool.totalBorrows > 0n ? pool.totalDeposits - pool.totalBorrows : 0n, pool.decimals)} · Fee: {flashTokenAmt ? (flashTokenAmt * feeRate).toFixed(4) : 0} {pool.symbol}</span>
+                {flashValid && (
+                  <span style={{ fontFamily: "var(--font-mono),monospace", color: "#059669" }}>
+                    {flashInputMode === "token" ? `≈ ${formatUsd(flashUsdAmt)}` : `≈ ${flashTokenAmt.toFixed(4)} ${pool.symbol}`}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {pool && (
@@ -1233,9 +1259,9 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
 
           <div style={{ borderTop: "1px solid #f0f0f3", paddingTop: 12, marginBottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
             {[
-              { k: "Borrow amount", v: amount && pool ? `${amount} ${pool.symbol}` : "—" },
-              { k: `Fee (${(feeRate * 100).toFixed(2)}%)`, v: amount && pool ? `${(parseFloat(amount) * feeRate).toFixed(4)} ${pool.symbol}` : "—" },
-              { k: "Repayment due", v: amount && pool ? `${(parseFloat(amount) * (1 + feeRate)).toFixed(4)} ${pool.symbol}` : "—" },
+              { k: "Borrow amount", v: flashTokenAmt && pool ? `${flashTokenAmt.toFixed(4)} ${pool.symbol}${flashUsdAmt ? ` (${formatUsd(flashUsdAmt)})` : ""}` : "—" },
+              { k: `Fee (${(feeRate * 100).toFixed(2)}%)`, v: flashTokenAmt && pool ? `${(flashTokenAmt * feeRate).toFixed(4)} ${pool.symbol}${flashPrice ? ` (${formatUsd(flashTokenAmt * feeRate * flashPrice)})` : ""}` : "—" },
+              { k: "Repayment due", v: flashTokenAmt && pool ? `${(flashTokenAmt * (1 + feeRate)).toFixed(4)} ${pool.symbol}${flashPrice ? ` (${formatUsd(flashTokenAmt * (1 + feeRate) * flashPrice)})` : ""}` : "—" },
             ].map((r, i) => <InfoRow key={i} k={r.k} v={r.v} />)}
           </div>
 
@@ -1258,7 +1284,7 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
               {status === "error" && errorMsg && (
                 <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "9px 12px", fontSize: 12, color: "#991b1b" }}>{errorMsg}</div>
               )}
-              <button disabled={!connected || !amount || !pool || ["building", "signing", "confirming"].includes(status)} onClick={() => { if (pool) { reset(); flashExecute(pool, BigInt(Math.round(parseFloat(amount || "0") * 10 ** (pool?.decimals ?? 9)))); } }} style={{ width: "100%", padding: "11px", borderRadius: 12, background: connected && amount ? "#0b0b10" : "#e7e7ec", color: connected && amount ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: connected && amount ? "pointer" : "not-allowed", transition: "all .2s" }}>
+              <button disabled={!connected || !flashTokenAmt || !pool || ["building", "signing", "confirming"].includes(status)} onClick={() => { if (pool && flashTokenAmt > 0) { reset(); flashExecute(pool, BigInt(Math.round(flashTokenAmt * 10 ** (pool?.decimals ?? 9)))); } }} style={{ width: "100%", padding: "11px", borderRadius: 12, background: connected && flashTokenAmt ? "#0b0b10" : "#e7e7ec", color: connected && flashTokenAmt ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: connected && flashTokenAmt ? "pointer" : "not-allowed", transition: "all .2s" }}>
                 {!connected ? "Connect wallet" : status === "building" ? "Building…" : status === "signing" ? "Approve in wallet…" : status === "confirming" ? "Confirming…" : "Execute flash loan"}
               </button>
             </div>
@@ -1309,7 +1335,7 @@ const FlashView = ({ connected, fhe, pools }: { connected: boolean; fhe: boolean
 
 // ─── Liquidate View ───────────────────────────────────────────────────────────
 
-const LiquidateView = ({ connected, pools }: { connected: boolean; pools: PoolView[] }) => {
+const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; pools: PoolView[]; pythPrices: PythPrices }) => {
   const [unhealthy, setUnhealthy] = useState<UnhealthyPosition[]>([]);
   const [loading, setLoading] = useState(true);
   const { liquidate, status, txSig, errorMsg, reset } = useVeilActions();
@@ -1376,8 +1402,14 @@ const LiquidateView = ({ connected, pools }: { connected: boolean; pools: PoolVi
                       </div>
                     </td>
                     <td><span style={{ fontSize: 12, fontFamily: "var(--font-mono),monospace", color: "#5b5b66" }}>{shortAddr(pos.owner)}</span></td>
-                    <td style={{ textAlign: "right", fontWeight: 500 }}>{formatBigAmount(deposits, pool.decimals)}</td>
-                    <td style={{ textAlign: "right", fontWeight: 500, color: "#dc2626" }}>{formatBigAmount(borrows, pool.decimals)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 500 }}>
+                      <div>{formatBigAmount(deposits, pool.decimals)}</div>
+                      {(() => { const pr = pythPrices[pool.id]; const uv = pr ? tokenToUsd(deposits, pool.decimals, pr) : null; return uv != null ? <div style={{ fontSize: 11, color: "#059669" }}>{formatUsd(uv)}</div> : null; })()}
+                    </td>
+                    <td style={{ textAlign: "right", fontWeight: 500, color: "#dc2626" }}>
+                      <div>{formatBigAmount(borrows, pool.decimals)}</div>
+                      {(() => { const pr = pythPrices[pool.id]; const uv = pr ? tokenToUsd(borrows, pool.decimals, pr) : null; return uv != null ? <div style={{ fontSize: 11, color: "#dc2626", opacity: 0.7 }}>{formatUsd(uv)}</div> : null; })()}
+                    </td>
                     <td style={{ textAlign: "center" }}><HFBadge hf={hf} /></td>
                     <td style={{ textAlign: "center" }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 999 }}>+{wadToPctNum(pool.liquidationBonusWad)}%</span>
@@ -1730,8 +1762,17 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
   const { type, pool } = modal;
   const poolType = getPoolType(pool.symbol);
   const [amount, setAmount] = useState("");
+  const [inputMode, setInputMode] = useState<"token" | "usd">("token");
   const [encPos, setEncPos] = useState(fhe && poolType === "enc");
   const [chain, setChain] = useState(poolType === "ika" ? "ika" : "solana");
+
+  const price = pythPrices[pool.id] ?? null;
+  const parsed = parseFloat(amount);
+  const validInput = !isNaN(parsed) && parsed > 0;
+
+  // Derive token and USD amounts from whichever mode the user is typing in
+  const tokenAmount = inputMode === "token" ? (validInput ? parsed : 0) : (validInput && price ? parsed / price : 0);
+  const usdAmount = inputMode === "usd" ? (validInput ? parsed : 0) : (validInput && price ? parsed * price : 0);
 
   const isPrivate = encPos;
   const isSupply = type === "supply" || type === "withdraw";
@@ -1740,16 +1781,30 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
   const btnBg = poolType === "ika" ? "linear-gradient(135deg,#f97316,#eab308)" : poolType === "enc" ? "linear-gradient(135deg,#6d28d9,#9333ea)" : poolType === "oro" ? "linear-gradient(135deg,#eab308,#ca8a04)" : "#0b0b10";
 
   const handleConfirm = () => {
-    if (!amount) return;
-    const trimmed = amount.trim();
-    if (!trimmed || Number(trimmed) <= 0) return;
-    // String-based parsing avoids floating-point precision loss on large amounts
-    const [whole = "0", frac = ""] = trimmed.split(".");
+    if (!amount || tokenAmount <= 0) return;
+    // Convert the resolved token amount to lamports (base units)
+    const tokenStr = tokenAmount.toFixed(pool.decimals);
+    const [whole = "0", frac = ""] = tokenStr.split(".");
     const fracPadded = frac.padEnd(pool.decimals, "0").slice(0, pool.decimals);
     const lamports = BigInt(whole + fracPadded);
     if (lamports <= 0n) return;
     onSubmit(type, pool, lamports);
     setModal(null);
+  };
+
+  const toggleMode = () => {
+    if (!price) return;
+    // Convert the current input to the other denomination
+    if (inputMode === "token" && validInput) {
+      setInputMode("usd");
+      setAmount((parsed * price).toFixed(2));
+    } else if (inputMode === "usd" && validInput) {
+      setInputMode("token");
+      setAmount((parsed / price).toFixed(pool.decimals > 4 ? 4 : pool.decimals));
+    } else {
+      setInputMode(inputMode === "token" ? "usd" : "token");
+      setAmount("");
+    }
   };
 
   return (
@@ -1775,18 +1830,23 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
         )}
 
         <div style={{ background: "#f4f4f6", border: "1px solid #e7e7ec", borderRadius: 12, display: "flex", alignItems: "center", padding: "10px 14px", marginBottom: 6 }}>
+          {inputMode === "usd" && <span style={{ fontSize: 22, fontWeight: 600, color: "#0b0b10", marginRight: 2 }}>$</span>}
           <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" style={{ background: "none", border: "none", outline: "none", fontSize: 22, fontWeight: 600, flex: 1, color: "#0b0b10", width: 0 }} />
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#5b5b66" }}>{pool.symbol}</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#5b5b66" }}>{inputMode === "token" ? pool.symbol : "USD"}</span>
+          {price && (
+            <button onClick={toggleMode} title={`Switch to ${inputMode === "token" ? "USD" : pool.symbol}`} style={{ marginLeft: 8, width: 28, height: 28, borderRadius: 999, border: "1px solid #e7e7ec", background: "white", cursor: "pointer", display: "grid", placeItems: "center", fontSize: 13, color: "#5b5b66", flexShrink: 0 }}>⇄</button>
+          )}
         </div>
         <div style={{ fontSize: 11.5, color: "#5b5b66", marginBottom: 14, display: "flex", justifyContent: "space-between" }}>
-          <span>Enter amount in {pool.symbol}</span>
-          {(() => {
-            const price = pythPrices[pool.id];
-            const parsed = parseFloat(amount);
-            if (!price || isNaN(parsed) || parsed <= 0) return <span>{formatPrice(price, "")}</span>;
-
-            return <span style={{ fontFamily: "var(--font-mono),monospace", color: "#059669" }}>≈ {formatUsd(parsed * price)}</span>;
-          })()}
+          <span>
+            {inputMode === "token" ? `Enter amount in ${pool.symbol}` : `Enter amount in USD`}
+            {price && <span style={{ color: "#9ca3af" }}> · {formatPrice(price, "")}/{pool.symbol}</span>}
+          </span>
+          {validInput && (
+            <span style={{ fontFamily: "var(--font-mono),monospace", color: "#059669" }}>
+              {inputMode === "token" ? `≈ ${formatUsd(usdAmount)}` : `≈ ${tokenAmount.toFixed(pool.decimals > 4 ? 4 : pool.decimals)} ${pool.symbol}`}
+            </span>
+          )}
         </div>
 
         {(type === "supply" || type === "borrow") && (
@@ -1940,8 +2000,8 @@ export default function DAppPage() {
       <main className="dapp-main">
         {view === "markets" && <MarketsView fhe={fhe} setModal={setModal} pools={pools} poolsLoading={poolsLoading} poolsError={poolsError} refreshPools={refreshPools} />}
         {view === "portfolio" && <PortfolioView fhe={fhe} connected={connected} setModal={setModal} pools={pools} refreshKey={portfolioRefreshKey} />}
-        {view === "flash" && <FlashView connected={connected} fhe={fhe} pools={pools} />}
-        {view === "liquidate" && <LiquidateView connected={connected} pools={pools} />}
+        {view === "flash" && <FlashView connected={connected} fhe={fhe} pools={pools} pythPrices={pythPrices} />}
+        {view === "liquidate" && <LiquidateView connected={connected} pools={pools} pythPrices={pythPrices} />}
         {view === "history" && <HistoryView connected={connected} pools={pools} />}
       </main>
 
