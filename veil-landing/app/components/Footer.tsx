@@ -50,7 +50,7 @@ export const Footer = () => {
 
       <div className="border-t border-zinc-200/80">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-6 text-[12.5px] text-zinc-500 md:flex-row md:items-center md:justify-between">
-          <div>© {new Date().getFullYear()} Veil Labs · MIT · Experimental, not production-ready.</div>
+          <div>© {new Date().getFullYear()} Veil Labs · BSL 1.1 · Experimental, not production-ready.</div>
           <div className="mono flex flex-wrap items-center gap-x-4 gap-y-1">
             <span>commit 0x3Fa9…4c12</span>
             <span className="text-zinc-300">·</span>

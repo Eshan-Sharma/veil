@@ -66,7 +66,7 @@ export const Hero = () => {
             <span className="text-zinc-300">·</span>
             <span>Non-custodial</span>
             <span className="text-zinc-300">·</span>
-            <span>Open-source · MIT</span>
+            <span>Source-available · BSL 1.1</span>
           </div>
         </div>
 

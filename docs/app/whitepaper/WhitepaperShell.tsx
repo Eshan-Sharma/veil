@@ -460,7 +460,7 @@ export const WhitepaperShell = () => {
         }}>
           <Meta label="AUTHOR"     value="Veil Labs" />
           <Meta label="STATUS"     value="DEVNET · PRE-AUDIT" />
-          <Meta label="LICENSE"    value="OPEN" />
+          <Meta label="LICENSE"    value="BSL 1.1" />
           <Meta label="REV"        value="0x0001" />
           <Meta label="SHA"        value="GROUND-TRUTHED" last />
         </div>
