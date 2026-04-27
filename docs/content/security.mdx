@@ -178,6 +178,115 @@ The fee is configurable via `UpdatePool` (`flash_fee_bps`). The minimum enforcea
 
 ---
 
+## AI Security Audit — April 27, 2026
+
+Automated security review of the Veil on-chain program (`programs/src/`), API layer, and frontend. Findings are organized by severity.
+
+### Critical
+
+**C-1: MockFees Backdoor Instruction**
+
+- **Location:** `programs/src/instructions/mock_fees.rs`, dispatched via `entrypoint.rs`
+- **Description:** The `MockFees` instruction allows anyone to directly set `accumulated_fees` on any pool to an arbitrary value. No authority check is enforced — any signer can call it.
+- **Attack:** An attacker calls `MockFees` to inflate `accumulated_fees` to the pool's entire vault balance, then calls `CollectFees` (as the authority, or exploits this in combination with other bugs) to drain the vault.
+- **Recommendation:** Remove `MockFees` from the production build entirely. If needed for testing, gate it behind a `#[cfg(feature = "testing")]` flag so it is excluded from release builds.
+
+**C-2: Missing Pyth Account Owner Verification**
+
+- **Location:** `programs/src/instructions/update_oracle_price.rs`
+- **Description:** The oracle update instruction checks Pyth magic bytes, account type, data length, status, confidence, and feed address — but does **not** verify that the account is owned by the Pyth program (`FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH`).
+- **Attack:** An attacker creates a fake account with the correct magic bytes, type field, and data layout but containing a manipulated price. Since ownership is not checked, the program accepts this spoofed oracle and caches the attacker's price. The attacker then liquidates healthy positions or borrows at inflated collateral valuations.
+- **Recommendation:** Add an owner check: `if oracle_account.owner() != &PYTH_PROGRAM_ID { return Err(OracleInvalid); }` before reading any fields.
+
+**C-3: Missing Account Owner Checks on PDAs**
+
+- **Location:** All instruction handlers that read pool, position, or vault accounts
+- **Description:** Instructions verify PDA derivation (seeds + bump) but do not verify that the accounts are actually owned by the Veil program. On Solana, PDA derivation alone is not sufficient — an attacker can create an account at the same address via a different program if the account doesn't already exist, or pass accounts from other programs that happen to have valid-looking data.
+- **Attack:** An attacker passes a crafted account from a program they control. The data layout matches what Veil expects, but the values are manipulated (e.g., inflated deposit amounts). Veil reads the fake data and allows unauthorized withdrawals.
+- **Recommendation:** Add `if account.owner() != program_id { return Err(InvalidAccountOwner); }` for every account the program reads state from (pools, positions, encrypted positions, ika positions).
+
+### High
+
+**H-1: No Timestamp Staleness Check on Oracle Prices**
+
+- **Location:** `programs/src/instructions/update_oracle_price.rs`
+- **Description:** The instruction checks Pyth `agg.status == Trading` and confidence bounds but does not check `agg.publish_time` or `timestamp`. A price from hours or days ago could be accepted as current.
+- **Attack:** During network congestion or Pyth downtime, the cached price goes stale. An attacker waits for a significant real-world price movement, then uses the stale on-chain price to borrow at an outdated (favorable) collateral valuation or avoid liquidation.
+- **Recommendation:** Add a staleness window: `if clock.unix_timestamp - agg.timestamp > MAX_ORACLE_AGE { return Err(OraclePriceStale); }`. A typical threshold is 60–120 seconds.
+
+**H-2: Interest Accrual Unbounded Time Jump**
+
+- **Location:** `programs/src/instructions/accrue_interest.rs`
+- **Description:** Interest accrual uses `(current_slot - last_accrual_slot)` as the time delta. If no one calls `AccrueInterest` for an extended period, the jump can be large, potentially causing index overflow or extreme interest accumulation.
+- **Attack:** On a low-activity pool, an attacker deliberately avoids triggering accrual for days, then triggers it. The large time delta causes a massive index jump, potentially overflowing `u128` math or creating an exploitable discrepancy between supply and borrow indices.
+- **Recommendation:** Cap the maximum time delta per accrual (e.g., 1 hour worth of slots). If the gap exceeds the cap, accrue the cap and require multiple calls.
+
+**H-3: Liquidation Bonus Can Exceed Collateral**
+
+- **Location:** `programs/src/instructions/liquidate.rs`
+- **Description:** The liquidation bonus is applied as a percentage of the repaid amount. If `close_factor * debt * (1 + liquidation_bonus)` exceeds the borrower's collateral, the instruction may attempt to transfer more tokens than the position holds.
+- **Attack:** With aggressive parameters (high close factor + high liquidation bonus), a liquidator could extract more value than the position's collateral, creating bad debt in the pool.
+- **Recommendation:** Clamp the liquidation transfer to `min(bonus_amount, position.deposited)` and add a bad-debt accounting path when collateral is insufficient.
+
+**H-4: No Signer Verification on Position Owner for Borrow**
+
+- **Location:** `programs/src/instructions/borrow.rs`
+- **Description:** The borrow instruction checks that the position PDA matches the borrower's public key but may not verify that the borrower actually signed the transaction, depending on how the account is passed.
+- **Recommendation:** Ensure the borrower account has `is_signer = true` enforced in the instruction's account validation, not just in CPI contexts.
+
+### Medium
+
+**M-1: Flash Loan Guard Uses Amount Instead of Boolean**
+
+- **Location:** `programs/src/state/lending_pool.rs:88`
+- **Description:** `flash_loan_amount` is a `u64` that doubles as both a guard flag and the amount to repay. If any code path sets it to a non-zero value without going through `FlashBorrow`, the pool enters a stuck state where flash loans are permanently blocked.
+- **Recommendation:** Consider separating the boolean guard (`flash_loan_active: bool`) from the amount, or ensure all code paths that modify pool state do not accidentally set `flash_loan_amount`.
+
+**M-2: UpdatePool Has No Parameter Bounds**
+
+- **Location:** `programs/src/instructions/update_pool.rs`
+- **Description:** `UpdatePool` accepts arbitrary values for LTV, liquidation threshold, interest rate slopes, and fees. A misconfigured or malicious authority could set LTV to 100% (instant insolvency risk), liquidation bonus to 100% (drain on liquidation), or slope2 to `u128::MAX` (overflow in interest math).
+- **Recommendation:** Add sanity bounds: `ltv < liquidation_threshold < 100%`, `liquidation_bonus < 50%`, `reserve_factor < 100%`, `slopes < reasonable_max`.
+
+**M-3: No Rate Limiting on Oracle Updates**
+
+- **Location:** `programs/src/instructions/update_oracle_price.rs`
+- **Description:** Anyone can call `UpdateOraclePrice` on any pool with no rate limit. While not directly exploitable, this creates a griefing vector (filling blocks with oracle update transactions) and could be combined with other timing attacks.
+- **Recommendation:** Consider a minimum slot interval between updates (e.g., once per 2 slots).
+
+### Low / Informational
+
+**L-1: Hardcoded Confidence Threshold**
+
+- **Location:** `programs/src/instructions/update_oracle_price.rs`
+- **Description:** The 2% confidence threshold (`conf > price / 50`) is hardcoded. Different assets have different normal confidence ranges — gold (XAU) typically has tighter confidence than crypto assets.
+- **Recommendation:** Make the confidence threshold configurable per pool via `UpdatePool`.
+
+**L-2: No Event Emission for Critical State Changes**
+
+- **Location:** All instruction handlers
+- **Description:** The program does not emit Solana program logs or events for critical state changes (liquidations, oracle updates, parameter changes). This makes off-chain monitoring and incident response difficult.
+- **Recommendation:** Add `msg!()` or structured event logs for liquidations, oracle updates, pause/resume, and parameter changes.
+
+**L-3: Pool Authority Is Immutable After Initialize**
+
+- **Location:** `programs/src/instructions/initialize.rs`
+- **Description:** The pool authority is set at initialization and cannot be changed. If the authority key is compromised or the team wants to migrate to a multisig, a new pool must be created and all liquidity migrated.
+- **Recommendation:** Add a two-step authority transfer instruction (`ProposeNewAuthority` → `AcceptAuthority`).
+
+**L-4: No Maximum Pool Count**
+
+- **Description:** There is no limit on the number of pools that can be initialized. An attacker could spam pool creation to bloat on-chain state, though they pay rent.
+- **Recommendation:** Low priority — rent cost is the natural rate limit. Consider a governance gate for pool creation in production.
+
+**L-5: Frontend Does Not Validate API Response Schema**
+
+- **Location:** `veil-landing/lib/veil/usePools.ts`
+- **Description:** The `usePools` hook trusts the API response shape without runtime validation. A compromised or buggy API could return malformed data that causes runtime errors or displays incorrect values.
+- **Recommendation:** Add runtime schema validation (e.g., Zod) for API responses, especially for financial data displayed to users.
+
+---
+
 ## Known Limitations
 
 | Limitation | Description |
