@@ -9,8 +9,9 @@ use pinocchio::nostd_panic_handler;
 
 use crate::instructions::{
     Borrow, CollectFees, Deposit, EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister,
-    IkaRelease, IkaSign, Initialize, Liquidate, PausePool, PrivateBorrow, PrivateDeposit,
-    PrivateRepay, PrivateWithdraw, Repay, ResumePool, UpdateOraclePrice, UpdatePool, Withdraw,
+    IkaRelease, IkaSign, Initialize, Liquidate, MockFees, PausePool, PrivateBorrow,
+    PrivateDeposit, PrivateRepay, PrivateWithdraw, Repay, ResumePool, UpdateOraclePrice,
+    UpdatePool, Withdraw,
 };
 
 entrypoint!(process_instruction);
@@ -48,6 +49,7 @@ pub fn process_instruction(
         IkaRelease::DISCRIMINATOR      => IkaRelease::from_data(rest)?.process(program_id, accounts),
         IkaSign::DISCRIMINATOR         => IkaSign::from_data(rest)?.process(program_id, accounts),
         UpdateOraclePrice::DISCRIMINATOR => UpdateOraclePrice::from_data(rest)?.process(program_id, accounts),
+        MockFees::DISCRIMINATOR          => MockFees::process(program_id, accounts),
         _                              => Err(ProgramError::InvalidInstructionData),
     }
 }
