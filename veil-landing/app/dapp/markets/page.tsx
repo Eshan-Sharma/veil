@@ -1,19 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
+
+import { useWallet } from "@solana/wallet-adapter-react";
+
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { usePools, type PoolView } from "@/lib/veil/usePools";
-import { useVeilActions } from "../hooks/useVeilActions";
 
-const WAD = 1_000_000_000_000_000_000n;
-function wadToPct(v: bigint | null): string {
-  if (!v) return "—";
-  return `${Number((v * 10000n) / WAD) / 100}%`;
-}
+import { Empty } from "../components/Empty";
+import { useVeilActions } from "../hooks/useVeilActions";
+import { wadToPctStr } from "../lib/format";
 
 export default function MarketsPage() {
   const { publicKey } = useWallet();
@@ -28,6 +27,7 @@ export default function MarketsPage() {
     if (!openModal || !amount.trim()) return;
     const a = BigInt(amount.trim().replace(/[^0-9]/g, "") || "0");
     if (a === 0n) return;
+
     const pool = openModal.pool;
     if (openModal.kind === "deposit")  void actions.deposit(pool, a);
     if (openModal.kind === "withdraw") void actions.withdraw(pool, a);
@@ -48,7 +48,7 @@ export default function MarketsPage() {
             </span>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <Link href="/dapp/positions" style={navLink}>POSITIONS</Link>
+            <Link href="/dapp" onClick={() => { if (typeof window !== "undefined") localStorage.setItem("veil_view", "portfolio"); }} style={navLink}>PORTFOLIO</Link>
             <Link href="/dapp/history" style={navLink}>HISTORY</Link>
             <Link href="/dapp/liquidate" style={navLink}>LIQUIDATE</Link>
             <WalletMultiButton style={btn} />
@@ -86,8 +86,8 @@ export default function MarketsPage() {
                 <span style={{ ...mono, color: "#6b7280" }}>{p.poolAddress.toBase58().slice(0, 6)}…{p.poolAddress.toBase58().slice(-4)}</span>
                 <span style={mono}>{p.totalDeposits.toString()}</span>
                 <span style={mono}>{p.totalBorrows.toString()}</span>
-                <span style={mono}>{wadToPct(p.ltvWad)}</span>
-                <span style={mono}>{wadToPct(p.liquidationThresholdWad)}</span>
+                <span style={mono}>{wadToPctStr(p.ltvWad)}</span>
+                <span style={mono}>{wadToPctStr(p.liquidationThresholdWad)}</span>
                 <span style={{ display: "flex", gap: 6 }}>
                   <ActionBtn kind="deposit"  onClick={() => publicKey && setOpenModal({ kind: "deposit",  pool: p })}>Supply</ActionBtn>
                   <ActionBtn kind="borrow"   onClick={() => publicKey && setOpenModal({ kind: "borrow",   pool: p })}>Borrow</ActionBtn>
@@ -153,7 +153,7 @@ export default function MarketsPage() {
   );
 }
 
-function ActionBtn({ kind, onClick, children }: { kind: "deposit" | "borrow" | "withdraw" | "repay"; onClick: () => void; children: React.ReactNode }) {
+const ActionBtn = ({ kind, onClick, children }: { kind: "deposit" | "borrow" | "withdraw" | "repay"; onClick: () => void; children: React.ReactNode }) => {
   const colors: Record<string, { bg: string; fg: string; bd: string }> = {
     deposit:  { bg: "#ecfdf5", fg: "#065f46", bd: "#a7f3d0" },
     borrow:   { bg: "#eff6ff", fg: "#1e40af", bd: "#bfdbfe" },
@@ -168,7 +168,7 @@ function ActionBtn({ kind, onClick, children }: { kind: "deposit" | "borrow" | "
       background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, cursor: "pointer",
     }}>{children}</button>
   );
-}
+};
 
 const hdr: React.CSSProperties = { background: "white", borderBottom: "1px solid #e5e7eb", padding: "0 24px" };
 const hdrInner: React.CSSProperties = { maxWidth: 1000, margin: "0 auto", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between" };
@@ -191,6 +191,3 @@ const miniBtn: React.CSSProperties = { padding: "8px 12px", borderRadius: 8, fon
 const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(11,11,16,0.6)", display: "grid", placeItems: "center", zIndex: 100 };
 const modal: React.CSSProperties = { background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "20px 22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,.2)" };
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center" }}>{children}</div>;
-}

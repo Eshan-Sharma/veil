@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
+
+import { useWallet } from "@solana/wallet-adapter-react";
+
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import { buildExplorerTxUrl } from "@/lib/solana/rpc";
+
+import { Empty } from "../components/Empty";
 
 type TxRow = {
   id: number;
@@ -55,7 +59,7 @@ export default function HistoryPage() {
       .then((d: { transactions: TxRow[] }) => setRows(d.transactions ?? []))
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [publicKey])
+  }, [publicKey]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -142,9 +146,3 @@ const tableRow: React.CSSProperties = {
   padding: "10px 18px", borderBottom: "1px solid #f3f4f6", alignItems: "center", gap: 8,
 };
 const mono: React.CSSProperties = { fontFamily: "var(--font-mono),monospace", fontSize: 12.5, color: "#0b0b10" };
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "48px 24px", textAlign: "center" }}>{children}</div>
-  );
-}
