@@ -1,7 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { POOL_SIZE, POSITION_SIZE } from "./constants";
 
-/** Mirrors the on-chain LendingPool struct (352 bytes, little-endian). */
+/** Mirrors the on-chain LendingPool struct (416 bytes, little-endian). */
 export type LendingPool = {
   discriminator: Uint8Array; // [0..8]
   authority: PublicKey;       // [8..40]
@@ -14,7 +14,8 @@ export type LendingPool = {
   authorityBump: number;      // [136]
   poolBump: number;           // [137]
   vaultBump: number;          // [138]
-  // _pad [139..144]
+  paused: boolean;            // [139]
+  // _pad [140..144]
   borrowIndex: bigint;        // [144..160] u128
   supplyIndex: bigint;        // [160..176] u128
   baseRate: bigint;           // [176..192] u128
@@ -29,6 +30,11 @@ export type LendingPool = {
   closeFactor: bigint;        // [320..336] u128
   flashLoanAmount: bigint;    // [336..344]
   flashFeeBps: bigint;        // [344..352]
+  pythPriceFeed: PublicKey;   // [352..384]
+  oraclePrice: bigint;        // [384..392] i64
+  oracleConf: bigint;         // [392..400] u64
+  oracleExpo: number;         // [400..404] i32
+  // _oracle_pad [404..416]
 };
 
 /** Mirrors the on-chain UserPosition struct (144 bytes, little-endian). */
@@ -60,6 +66,10 @@ function readU128LE(buf: Buffer, offset: number): bigint {
   return (hi << 64n) | lo;
 }
 
+function readI32LE(buf: Buffer, offset: number): number {
+  return buf.readInt32LE(offset);
+}
+
 export function decodeLendingPool(data: Buffer): LendingPool {
   if (data.length < POOL_SIZE) {
     throw new Error(`Expected ${POOL_SIZE} bytes, got ${data.length}`);
@@ -76,6 +86,7 @@ export function decodeLendingPool(data: Buffer): LendingPool {
     authorityBump: data[136],
     poolBump: data[137],
     vaultBump: data[138],
+    paused: data[139] !== 0,
     borrowIndex: readU128LE(data, 144),
     supplyIndex: readU128LE(data, 160),
     baseRate: readU128LE(data, 176),
@@ -90,6 +101,10 @@ export function decodeLendingPool(data: Buffer): LendingPool {
     closeFactor: readU128LE(data, 320),
     flashLoanAmount: readU64LE(data, 336),
     flashFeeBps: readU64LE(data, 344),
+    pythPriceFeed: new PublicKey(data.slice(352, 384)),
+    oraclePrice: readI64LE(data, 384),
+    oracleConf: readU64LE(data, 392),
+    oracleExpo: readI32LE(data, 400),
   };
 }
 

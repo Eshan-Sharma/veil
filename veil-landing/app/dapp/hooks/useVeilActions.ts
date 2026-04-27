@@ -21,25 +21,31 @@ import type { PoolView } from "@/lib/veil/usePools";
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
 
-/** Fire-and-forget POST to the tx_log API. */
-function logTx(p: { signature: string; wallet: string; action: string; pool_address?: string; amount?: bigint; status?: string; error_msg?: string }) {
+const logTx = (p: { signature: string; wallet: string; action: string; pool_address?: string; amount?: bigint; status?: string; error_msg?: string }) => {
   void fetch("/api/transactions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...p, amount: p.amount?.toString() }),
   }).catch(() => {});
-}
+};
 
-/** Fire-and-forget pool sync after a state-changing tx. */
-function syncPool(poolAddress: string, rpc: string) {
+const syncPool = (poolAddress: string, rpc: string) => {
   void fetch("/api/pools/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pool_address: poolAddress, rpc }),
   }).catch(() => {});
-}
+};
 
-export function useVeilActions() {
+const syncPosition = (poolAddress: string, user: string, rpc: string) => {
+  void fetch("/api/positions/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pool_address: poolAddress, user, rpc }),
+  }).catch(() => {});
+};
+
+export const useVeilActions = () => {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const { endpoint } = useSolanaRpc();
@@ -47,7 +53,7 @@ export function useVeilActions() {
   const [txSig, setTxSig] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  function reset() { setStatus("idle"); setTxSig(null); setErrorMsg(null); }
+  const reset = () => { setStatus("idle"); setTxSig(null); setErrorMsg(null); };
 
   async function sendTx(
     buildIx: () => TransactionInstruction,
@@ -72,6 +78,7 @@ export function useVeilActions() {
       logTx({ signature: sig, wallet: publicKey.toBase58(), action: meta.action,
               pool_address: meta.poolAddress, amount: meta.amount, status: "confirmed" });
       syncPool(meta.poolAddress, endpoint);
+      syncPosition(meta.poolAddress, publicKey.toBase58(), endpoint);
     } catch (e: unknown) {
       setStatus("error");
       setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
@@ -181,5 +188,6 @@ export function useVeilActions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [publicKey, connection, endpoint, sendTransaction]
   );
+
   return { deposit, withdraw, borrow, repay, liquidate, flashExecute, status, txSig, errorMsg, reset };
-}
+};
