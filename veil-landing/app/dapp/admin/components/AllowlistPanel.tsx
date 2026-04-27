@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+
 import { requestSignedAuth } from "@/lib/auth/client";
 
 type AdminEntry = {
@@ -13,7 +15,7 @@ type AdminEntry = {
   created_at: string;
 };
 
-export function AllowlistPanel() {
+export const AllowlistPanel = () => {
   const wallet = useWallet();
   const [admins, setAdmins] = useState<AdminEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,4 +153,4 @@ export function AllowlistPanel() {
       </div>
     </div>
   );
-}
+};

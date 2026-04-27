@@ -5,7 +5,7 @@ export const Pinocchio = () => {
     { op: "health_check", anchor: 14200, pinocchio: 3900 },
     { op: "liquidate", anchor: 51200, pinocchio: 17400 },
   ];
-  const max = Math.max(...rows.map((r) => r.anchor))
+  const max = Math.max(...rows.map((r) => r.anchor));
 
   return (
     <section className="relative">
@@ -88,11 +88,9 @@ export const Pinocchio = () => {
   );
 }
 
-function Stat({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="rounded-2xl border border-zinc-200 bg-white/80 p-4">
-      <div className="text-[26px] font-semibold tracking-tight text-zinc-900">{k}</div>
-      <div className="mt-1 text-[12px] leading-snug text-zinc-500">{v}</div>
-    </div>
-  );
-}
+const Stat = ({ k, v }: { k: string; v: string }) => (
+  <div className="rounded-2xl border border-zinc-200 bg-white/80 p-4">
+    <div className="text-[26px] font-semibold tracking-tight text-zinc-900">{k}</div>
+    <div className="mt-1 text-[12px] leading-snug text-zinc-500">{v}</div>
+  </div>
+);

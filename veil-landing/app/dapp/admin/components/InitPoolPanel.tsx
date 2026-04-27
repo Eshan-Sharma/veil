@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
+
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { requestSignedAuth } from "@/lib/auth/client";
 import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { buildInitializePoolTx } from "@/lib/veil/initialize";
-import { requestSignedAuth } from "@/lib/auth/client";
 
 type Status = "idle" | "building" | "signing" | "confirming" | "registering" | "success" | "error";
 
-export function InitPoolPanel() {
+export const InitPoolPanel = () => {
   const { publicKey, sendTransaction } = useWallet();
   const wallet = useWallet();
   const { connection } = useConnection();
@@ -18,6 +20,7 @@ export function InitPoolPanel() {
 
   const [tokenMint, setTokenMint] = useState("");
   const [symbol, setSymbol] = useState("");
+  const [decimals, setDecimals] = useState("9");
   const [status, setStatus] = useState<Status>("idle");
   const [sig, setSig] = useState<string | null>(null);
   const [poolAddr, setPoolAddr] = useState<string | null>(null);
@@ -67,6 +70,7 @@ export function InitPoolPanel() {
           pool_bump: built.poolBump,
           authority_bump: built.authorityBump,
           vault_bump: 0,
+          decimals: parseInt(decimals) || 9,
           init_signature: txSig,
         }),
       });
@@ -113,14 +117,26 @@ export function InitPoolPanel() {
         />
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Symbol (optional)</div>
-        <input
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value.toUpperCase().slice(0, 8))}
-          placeholder="USDC"
-          style={{ width: 200, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 13, background: "#f9f9fb", outline: "none", boxSizing: "border-box" }}
-        />
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Symbol (optional)</div>
+          <input
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase().slice(0, 8))}
+            placeholder="USDC"
+            style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 13, background: "#f9f9fb", outline: "none", boxSizing: "border-box" }}
+          />
+        </div>
+        <div style={{ width: 80 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Decimals</div>
+          <input
+            type="number"
+            value={decimals}
+            onChange={(e) => setDecimals(e.target.value)}
+            min={0} max={18}
+            style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 13, background: "#f9f9fb", outline: "none", boxSizing: "border-box", textAlign: "center" }}
+          />
+        </div>
       </div>
 
       <div style={{ padding: "12px 14px", background: "#fffbeb", border: "1px solid #fef08a", borderRadius: 10, fontSize: 12, color: "#854d0e", marginBottom: 14, lineHeight: 1.6 }}>
@@ -166,4 +182,4 @@ export function InitPoolPanel() {
       )}
     </div>
   );
-}
+};

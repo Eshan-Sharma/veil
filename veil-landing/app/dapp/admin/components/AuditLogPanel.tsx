@@ -17,7 +17,7 @@ const ACTION_TONE: Record<string, { fg: string; bg: string }> = {
   init_pool:    { fg: "#1e40af", bg: "#dbeafe" },
 };
 
-export function AuditLogPanel() {
+export const AuditLogPanel = () => {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -95,4 +95,4 @@ export function AuditLogPanel() {
       </div>
     </div>
   );
-}
+};

@@ -14,7 +14,7 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
  * the real button on mount — the second render is post-hydration so React
  * doesn't compare it against the server output.
  */
-export function WalletButton({ style }: { style?: CSSProperties }) {
+export const WalletButton = ({ style }: { style?: CSSProperties }) => {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
