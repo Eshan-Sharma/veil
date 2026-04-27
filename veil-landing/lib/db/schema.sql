@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS pools (
   total_deposits   NUMERIC NOT NULL DEFAULT 0,
   total_borrows    NUMERIC NOT NULL DEFAULT 0,
   accumulated_fees NUMERIC NOT NULL DEFAULT 0,
+  supply_index     TEXT NOT NULL DEFAULT '1000000000000000000',
+  borrow_index     TEXT NOT NULL DEFAULT '1000000000000000000',
   -- Risk parameters (stored as text for u128 fidelity)
   ltv_wad                  TEXT,
   liquidation_threshold_wad TEXT,
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS pools (
   slope1_wad               TEXT,
   slope2_wad               TEXT,
   flash_fee_bps            INTEGER,
+  decimals                 INTEGER NOT NULL DEFAULT 9,
   -- Oracle
   oracle_price       NUMERIC,
   oracle_conf        NUMERIC,
