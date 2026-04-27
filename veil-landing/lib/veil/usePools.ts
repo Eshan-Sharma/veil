@@ -17,6 +17,8 @@ export type ApiPool = {
   total_deposits: string;
   total_borrows: string;
   accumulated_fees: string;
+  supply_index: string;
+  borrow_index: string;
   ltv_wad: string | null;
   liquidation_threshold_wad: string | null;
   liquidation_bonus_wad: string | null;
@@ -28,6 +30,7 @@ export type ApiPool = {
   slope1_wad: string | null;
   slope2_wad: string | null;
   flash_fee_bps: number | null;
+  decimals: number;
   oracle_price: string | null;
   oracle_conf: string | null;
   oracle_expo: number | null;
@@ -48,6 +51,8 @@ export type PoolView = {
   totalDeposits: bigint;
   totalBorrows: bigint;
   accumulatedFees: bigint;
+  supplyIndex: bigint;
+  borrowIndex: bigint;
   ltvWad: bigint | null;
   liquidationThresholdWad: bigint | null;
   liquidationBonusWad: bigint | null;
@@ -59,6 +64,11 @@ export type PoolView = {
   slope1Wad: bigint | null;
   slope2Wad: bigint | null;
   flashFeeBps: number | null;
+  decimals: number;
+  oraclePrice: bigint | null;
+  oracleConf: bigint | null;
+  oracleExpo: number | null;
+  pythPriceFeed: string | null;
   source: "api" | "fallback";
 };
 
@@ -77,6 +87,8 @@ function toView(p: ApiPool): PoolView {
     totalDeposits: BigInt(p.total_deposits ?? "0"),
     totalBorrows: BigInt(p.total_borrows ?? "0"),
     accumulatedFees: BigInt(p.accumulated_fees ?? "0"),
+    supplyIndex: BigInt(p.supply_index ?? "1000000000000000000"),
+    borrowIndex: BigInt(p.borrow_index ?? "1000000000000000000"),
     ltvWad: p.ltv_wad ? BigInt(p.ltv_wad) : null,
     liquidationThresholdWad: p.liquidation_threshold_wad ? BigInt(p.liquidation_threshold_wad) : null,
     liquidationBonusWad: p.liquidation_bonus_wad ? BigInt(p.liquidation_bonus_wad) : null,
@@ -88,6 +100,11 @@ function toView(p: ApiPool): PoolView {
     slope1Wad: p.slope1_wad ? BigInt(p.slope1_wad) : null,
     slope2Wad: p.slope2_wad ? BigInt(p.slope2_wad) : null,
     flashFeeBps: p.flash_fee_bps,
+    decimals: p.decimals ?? 9,
+    oraclePrice: p.oracle_price ? BigInt(p.oracle_price) : null,
+    oracleConf: p.oracle_conf ? BigInt(p.oracle_conf) : null,
+    oracleExpo: p.oracle_expo,
+    pythPriceFeed: p.pyth_price_feed,
     source: "api",
   };
 }
