@@ -301,19 +301,15 @@ export const Architecture = () => {
   );
 }
 
-function Dot() {
-  return (
-    <span className="grid h-4 w-4 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
-      <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l2.5 2.5L10 3"/></svg>
-    </span>
-  );
-}
+const Dot = () => (
+  <span className="grid h-4 w-4 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+    <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l2.5 2.5L10 3"/></svg>
+  </span>
+);
 
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="flex items-center gap-2 text-[12px] text-zinc-500">
-      <span className={`h-2.5 w-8 rounded-full ${color} opacity-70`} />
-      {label}
-    </span>
-  );
-}
+const LegendItem = ({ color, label }: { color: string; label: string }) => (
+  <span className="flex items-center gap-2 text-[12px] text-zinc-500">
+    <span className={`h-2.5 w-8 rounded-full ${color} opacity-70`} />
+    {label}
+  </span>
+);

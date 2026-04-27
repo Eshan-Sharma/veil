@@ -11,7 +11,7 @@ const cipherPool = [
   "9cE4·DdE1·0aBb",
 ];
 
-function useCipher(seed = 0) {
+const useCipher = (seed = 0) => {
   const [i, setI] = useState(seed);
 
   useEffect(() => {
@@ -19,11 +19,18 @@ function useCipher(seed = 0) {
 
     return () => clearInterval(t);
   }, [seed]);
+
   return cipherPool[i];
+};
+
+interface EncryptedStatProps {
+  label: string;
+  seed: number;
+  mask: string;
 }
 
-function EncryptedStat({ label, seed, mask }: { label: string; seed: number; mask: string }) {
-  const v = useCipher(seed)
+const EncryptedStat = ({ label, seed, mask }: EncryptedStatProps) => {
+  const v = useCipher(seed);
 
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-2xl bg-zinc-50/80 p-3 ring-1 ring-zinc-100">
@@ -57,7 +64,7 @@ const goldRows = [
 
 export const PositionCard = () => {
   const [vault, setVault] = useState<"btc" | "gold">("btc");
-  const isBtc = vault === "btc"
+  const isBtc = vault === "btc";
 
   return (
     <div className="relative fade-rise">

@@ -66,18 +66,14 @@ export const Security = () => {
   );
 }
 
-function Dot() {
-  return (
-    <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
-      <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l2.5 2.5L10 3"/></svg>
-    </span>
-  );
-}
+const Dot = () => (
+  <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+    <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l2.5 2.5L10 3"/></svg>
+  </span>
+);
 
-function DotWarn() {
-  return (
-    <span className="mt-0.5 grid h-5 w-5 place-items-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-100">
-      <svg viewBox="0 0 12 12" width="8" height="8" fill="currentColor"><path d="M6 1l5 9H1zM5 5v3h2V5zm0 4v2h2V9z"/></svg>
-    </span>
-  );
-}
+const DotWarn = () => (
+  <span className="mt-0.5 grid h-5 w-5 place-items-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-100">
+    <svg viewBox="0 0 12 12" width="8" height="8" fill="currentColor"><path d="M6 1l5 9H1zM5 5v3h2V5zm0 4v2h2V9z"/></svg>
+  </span>
+);

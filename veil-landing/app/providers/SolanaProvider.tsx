@@ -33,9 +33,7 @@ const SolanaRpcContext = createContext<SolanaRpcContextValue>({
   setCustomRpc: () => {},
 });
 
-export function useSolanaRpc() {
-  return useContext(SolanaRpcContext);
-}
+export const useSolanaRpc = () => useContext(SolanaRpcContext);
 
 export default function SolanaProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<SolanaRpcConfig>(defaultConfig);
@@ -90,7 +88,7 @@ export default function SolanaProvider({ children }: { children: ReactNode }) {
         }),
     }),
     [config, endpoint]
-  )
+  );
 
   return (
     <SolanaRpcContext.Provider value={value}>

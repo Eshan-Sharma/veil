@@ -1,10 +1,14 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
-import { PublicKey, Transaction } from "@solana/web3.js";
 import Link from "next/link";
+
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey, Transaction } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+
+import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
+import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import {
   updatePoolIx,
   pausePoolIx,
@@ -13,33 +17,43 @@ import {
   type UpdatePoolParams,
 } from "@/lib/veil/instructions";
 import { findPoolAuthorityAddress } from "@/lib/veil/pda";
-import { WAD } from "@/lib/veil/constants";
+import { WAD, TOKEN_PROGRAM_ID } from "@/lib/veil/constants";
+import { buildExplorerTxUrl } from "@/lib/solana/rpc";
+
 import { useAdminRole } from "./hooks/useAdminRole";
 import { InitPoolPanel } from "./components/InitPoolPanel";
 import { AllowlistPanel } from "./components/AllowlistPanel";
 import { AuditLogPanel } from "./components/AuditLogPanel";
-import { useSolanaRpc } from "@/app/providers/SolanaProvider";
-import { buildExplorerTxUrl } from "@/lib/solana/rpc";
-
-// ─── Symbol → icon / color mapping ───────────────────────────────────────────
-
-const SYMBOL_META: Record<string, { icon: string; color: string }> = {
-  SOL:  { icon: "◎", color: "#7c3aed" },
-  BTC:  { icon: "₿", color: "#f97316" },
-  ETH:  { icon: "Ξ", color: "#6366f1" },
-  XAU:  { icon: "◈", color: "#ca8a04" },
-  USDC: { icon: "$", color: "#2563eb" },
-};
-const DEFAULT_META = { icon: "●", color: "#6b7280" };
+import { formatFees as sharedFormatFees, shortAddr } from "../lib/format";
+import { getPoolMeta } from "../lib/tokens";
 
 // ─── WAD conversion helpers ───────────────────────────────────────────────────
 
+/**
+ * Convert a percentage string (e.g. "80.5") to a WAD bigint (1e18 = 100%).
+ * 1.00% = 0.01 = 10^16 WAD.
+ */
 function percentToWad(pct: string): bigint {
   const cleaned = (pct || "0").trim().replace(/[^0-9.]/g, "");
+  if (!cleaned) return 0n;
   const [intStr, decStr = ""] = cleaned.split(".");
-  const dec2 = decStr.padEnd(2, "0").slice(0, 2);
-  const totalCentiPercent = BigInt(intStr || "0") * 100n + BigInt(dec2 || "0");
-  return totalCentiPercent * (WAD / 10000n);
+  
+  // We want (int.dec / 100) * 10^18 = (int.dec) * 10^16
+  // intPart * 10^16 + decPart * 10^(16 - decLen)
+  const intPart = BigInt(intStr || "0") * 10000000000000000n; // 10^16
+  
+  let decPart = 0n;
+  if (decStr) {
+    const decLen = decStr.length;
+    const exponent = 16 - decLen;
+    if (exponent >= 0) {
+      decPart = BigInt(decStr) * BigInt(10 ** exponent);
+    } else {
+      decPart = BigInt(decStr.slice(0, 16));
+    }
+  }
+  
+  return intPart + decPart;
 }
 
 // ─── WAD → percent helper ────────────────────────────────────────────────────
@@ -47,13 +61,17 @@ function percentToWad(pct: string): bigint {
 function wadToPercent(wad: string | null): string {
   if (!wad) return "0";
   const val = BigInt(wad);
-  // percent = val * 10000 / WAD, then format with 2 decimals
-  const centiPercent = val * 10000n / WAD;
-  const intPart = centiPercent / 100n;
-  const decPart = centiPercent % 100n;
+  // We want 10^18 (WAD) -> "100" (percent)
+  // So val * 100 / WAD
+  // For 4 decimal places of precision: val * 1,000,000 / WAD -> then divide by 10,000
+  const basisPoints = (val * 1000000n) / WAD; // 100.0000% -> 1000000
+  const intPart = basisPoints / 10000n;
+  const decPart = basisPoints % 10000n;
+  
   if (decPart === 0n) return intPart.toString();
-  return `${intPart}.${decPart.toString().padStart(2, "0").replace(/0+$/, "")}`;
+  return `${intPart}.${decPart.toString().padStart(4, "0").replace(/0+$/, "")}`;
 }
+
 
 // ─── Pool types ──────────────────────────────────────────────────────────────
 
@@ -67,6 +85,7 @@ type AdminPool = {
   authority: string;
   pool_bump: number;
   authority_bump: number;
+  decimals: number;
   accumulatedFees: string;
   paused: boolean;
   defaults: FormState;
@@ -94,6 +113,7 @@ type ApiPoolRow = {
   vault: string;
   pool_bump: number;
   authority_bump: number;
+  decimals: number;
   paused: boolean;
   accumulated_fees: string;
   ltv_wad: string | null;
@@ -111,7 +131,7 @@ type ApiPoolRow = {
 
 function apiPoolToAdminPool(row: ApiPoolRow): AdminPool {
   const sym = (row.symbol ?? row.token_mint.slice(0, 4)).toUpperCase();
-  const meta = SYMBOL_META[sym] ?? DEFAULT_META;
+  const meta = getPoolMeta(sym);
   return {
     pool_address: row.pool_address,
     token_mint: row.token_mint,
@@ -122,6 +142,7 @@ function apiPoolToAdminPool(row: ApiPoolRow): AdminPool {
     authority: row.authority,
     pool_bump: row.pool_bump,
     authority_bump: row.authority_bump,
+    decimals: row.decimals ?? 9,
     accumulatedFees: row.accumulated_fees ?? "0",
     paused: row.paused,
     defaults: {
@@ -147,14 +168,16 @@ type Tab = "pools" | "init" | "allowlist" | "audit";
 
 function ParamRow({ label, value, onChange, unit = "%", hint }: { label: string; value: string; onChange: (v: string) => void; unit?: string; hint?: string }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 36px", gap: 8, alignItems: "center" }}>
-      <div>
+    <div className="admin-param-row">
+      <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 500, color: "#374151" }}>{label}</div>
         {hint && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{hint}</div>}
       </div>
-      <input type="number" value={value} onChange={(e) => onChange(e.target.value)}
-        style={{ textAlign: "right", background: "#f9f9fb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#0b0b10", outline: "none", fontFamily: "var(--font-mono),monospace", width: "100%" }}/>
-      <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", textAlign: "left" }}>{unit}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <input type="number" value={value} onChange={(e) => onChange(e.target.value)}
+          style={{ textAlign: "right", background: "#f9f9fb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontWeight: 600, color: "#0b0b10", outline: "none", fontFamily: "var(--font-mono),monospace", width: 100 }}/>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", width: 30 }}>{unit}</div>
+      </div>
     </div>
   );
 }
@@ -199,12 +222,18 @@ function TxBanner({ status, sig, error, onReset }: { status: TxStatus; sig?: str
 
 // ─── Pool Edit Panel ──────────────────────────────────────────────────────────
 
-function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: (id: string, paused: boolean) => void }) {
+function PoolPanel({ pool, onPausedChange, onRefresh }: { pool: AdminPool; onPausedChange: (id: string, paused: boolean) => void; onRefresh: () => void }) {
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
+  const { endpoint } = useSolanaRpc();
 
   const [form, setForm] = useState<FormState>({ ...pool.defaults });
-  const [treasury, setTreasury] = useState("");
+  // Auto-derive treasury as the authority's ATA for this pool's token mint
+  const derivedTreasury = publicKey
+    ? getAssociatedTokenAddressSync(new PublicKey(pool.token_mint), publicKey, false, TOKEN_PROGRAM_ID).toBase58()
+    : "";
+  const [treasuryOverride, setTreasuryOverride] = useState("");
+  const treasury = treasuryOverride.trim() || derivedTreasury;
 
   const [pauseStatus, setPauseStatus] = useState<TxStatus>("idle");
   const [pauseSig, setPauseSig] = useState<string | undefined>();
@@ -269,16 +298,17 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
           pool_address: poolPda.toBase58(), status: "confirmed",
         }),
       });
+      // Sync pool with the same RPC the tx was sent to
       void fetch("/api/pools/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pool_address: poolPda.toBase58(), symbol: pool.symbol }),
-      });
+        body: JSON.stringify({ pool_address: poolPda.toBase58(), symbol: pool.symbol, rpc: endpoint }),
+      }).then(() => { setTimeout(onRefresh, 500); });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
       setStatus("error");
     }
-  }, [publicKey, connection, sendTransaction, pool.pool_address, pool.symbol, pool.vault]);
+  }, [publicKey, connection, sendTransaction, pool.pool_address, pool.symbol, pool.vault, endpoint, onRefresh]);
 
   async function handlePause() {
     setPauseStatus("idle"); setPauseSig(undefined); setPauseErr(undefined);
@@ -313,12 +343,12 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
   }
 
   async function handleCollect() {
-    if (!treasury.trim()) { setFeesStatus("error"); setFeesErr("Enter a treasury token account address"); return; }
+    if (!treasury) { setFeesStatus("error"); setFeesErr("Connect wallet to derive treasury ATA"); return; }
     setFeesStatus("idle"); setFeesSig(undefined); setFeesErr(undefined);
     await sendTx((poolPda) => {
       const [poolAuthority] = findPoolAuthorityAddress(poolPda);
       const vaultKey = new PublicKey(pool.vault);
-      const treasuryKey = new PublicKey(treasury.trim());
+      const treasuryKey = new PublicKey(treasury);
       return collectFeesIx(publicKey!, poolPda, vaultKey, treasuryKey, poolAuthority);
     }, setFeesStatus, setFeesSig, setFeesErr, "collect_fees");
   }
@@ -333,7 +363,8 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#0b0b10" }}>{pool.symbol} — Pool Status</div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>Controls deposit, borrow, and flash loan access</div>
+            <div style={{ fontSize: 11, fontFamily: "var(--font-mono),monospace", color: "#9ca3af", marginTop: 2 }}>{pool.token_mint}</div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Controls deposit, borrow, and flash loan access</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999,
             background: pool.paused ? "#fef2f2" : "#f0fdf4",
@@ -346,7 +377,7 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
         <div style={{ padding: "14px 18px", display: "flex", gap: 10 }}>
           <div style={{ flex: 1, background: "#f9f9fb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
             <div style={{ fontSize: 10.5, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Accumulated fees</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#059669" }}>{pool.accumulatedFees}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#059669" }}>{sharedFormatFees(pool.accumulatedFees, pool.decimals)} {pool.symbol}</div>
           </div>
           <div style={{ flex: 1, background: "#f9f9fb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
             <div style={{ fontSize: 10.5, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Withdraw/Repay</div>
@@ -410,15 +441,20 @@ function PoolPanel({ pool, onPausedChange }: { pool: AdminPool; onPausedChange: 
         </div>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Treasury token account</div>
-          <input value={treasury} onChange={(e) => setTreasury(e.target.value)} placeholder="Enter SPL token account address…"
+          {derivedTreasury && (
+            <div style={{ fontSize: 11.5, color: "#059669", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "7px 10px", marginBottom: 8, fontFamily: "var(--font-mono),monospace", wordBreak: "break-all" }}>
+              Auto-derived: {derivedTreasury}
+            </div>
+          )}
+          <input value={treasuryOverride} onChange={(e) => setTreasuryOverride(e.target.value)} placeholder={derivedTreasury ? "Override (leave empty to use your ATA)" : "Connect wallet to auto-derive…"}
             style={{ width: "100%", padding: "9px 12px", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 13, color: "#0b0b10", background: "#f9f9fb", outline: "none", fontFamily: "var(--font-mono),monospace", boxSizing: "border-box" }}/>
           <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-            Must be an ATA for the {pool.symbol} mint owned by your wallet or your Squads vault.
+            Defaults to your wallet&apos;s ATA for {pool.symbol}. Override to send to a Squads vault or other token account.
           </div>
         </div>
-        <button onClick={handleCollect} disabled={collecting || !treasury.trim()}
-          style={{ width: "100%", padding: "10px", borderRadius: 12, background: collecting || !treasury ? "#e5e7eb" : "linear-gradient(135deg,#059669,#10b981)", color: collecting || !treasury ? "#9ca3af" : "white", border: "none", fontSize: 14, fontWeight: 700, cursor: collecting || !treasury ? "not-allowed" : "pointer" }}>
-          {collecting ? "Processing…" : "Collect Fees →"}
+        <button onClick={handleCollect} disabled={collecting || !treasury || pool.accumulatedFees === "0"}
+          style={{ width: "100%", padding: "10px", borderRadius: 12, background: (collecting || !treasury || pool.accumulatedFees === "0") ? "#e5e7eb" : "linear-gradient(135deg,#059669,#10b981)", color: (collecting || !treasury || pool.accumulatedFees === "0") ? "#9ca3af" : "white", border: "none", fontSize: 14, fontWeight: 700, cursor: (collecting || !treasury || pool.accumulatedFees === "0") ? "not-allowed" : "pointer" }}>
+          {collecting ? "Processing…" : pool.accumulatedFees === "0" ? "No fees to collect" : "Collect Fees →"}
         </button>
         <TxBanner status={feesStatus} sig={feesSig} error={feesErr} onReset={() => setFeesStatus("idle")} />
       </div>
@@ -434,6 +470,17 @@ function PoolsView() {
   const [fetchErr, setFetchErr] = useState<string | null>(null);
   const [selectedAddr, setSelectedAddr] = useState<string | null>(null);
 
+  function refreshPools() {
+    fetch("/api/pools", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d: { pools: ApiPoolRow[] }) => {
+        const mapped = d.pools.map(apiPoolToAdminPool);
+        setPools(mapped);
+        if (!selectedAddr && mapped.length > 0) setSelectedAddr(mapped[0].pool_address);
+      })
+      .catch((e) => setFetchErr(e instanceof Error ? e.message : String(e)));
+  }
+
   useEffect(() => {
     setLoading(true);
     fetch("/api/pools", { cache: "no-store" })
@@ -445,6 +492,7 @@ function PoolsView() {
       })
       .catch((e) => setFetchErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectedPool = pools.find((p) => p.pool_address === selectedAddr);
@@ -476,8 +524,8 @@ function PoolsView() {
     );
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "start" }}>
-      <div style={{ position: "sticky", top: 20 }}>
+    <div className="admin-pools-layout" style={{ display: "grid", gap: 20, alignItems: "start" }}>
+      <div className="admin-pool-sidebar">
         <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#9ca3af", marginBottom: 8, paddingLeft: 4 }}>Pools</div>
         <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, overflow: "hidden" }}>
           {pools.map((p, i) => {
@@ -490,8 +538,9 @@ function PoolsView() {
                   cursor: "pointer", background: isSelected ? "#fafbff" : "transparent",
                   borderLeft: isSelected ? "3px solid #6d28d9" : "3px solid transparent" }}>
                 <div style={{ width: 32, height: 32, borderRadius: 9, background: p.color, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 700, color: "white" }}>{p.icon}</div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#0b0b10" }}>{p.symbol}</div>
+                  <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "var(--font-mono),monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortAddr(p.pool_address)}</div>
                   <div style={{ fontSize: 10.5, fontWeight: 600, color: p.paused ? "#dc2626" : "#059669" }}>
                     {p.paused ? "⏸ Paused" : "● Active"}
                   </div>
@@ -520,7 +569,7 @@ function PoolsView() {
                 <div style={{ fontSize: 12, color: "#6b7280" }}>Pool administrator controls</div>
               </div>
             </div>
-            <PoolPanel key={selectedPool.pool_address} pool={selectedPool} onPausedChange={handlePausedChange} />
+            <PoolPanel key={selectedPool.pool_address} pool={selectedPool} onPausedChange={handlePausedChange} onRefresh={refreshPools} />
           </>
         )}
       </div>
@@ -539,17 +588,17 @@ function TabBar({ tab, setTab, isSuperAdmin }: { tab: Tab; setTab: (t: Tab) => v
   ]
 
   return (
-    <div style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid #e5e7eb" }}>
+    <div className="admin-tab-bar" style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid #e5e7eb", overflowX: "auto", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none" }}>
       {tabs.filter((t) => t.visible).map((t) => {
-        const active = t.id === tab
+        const active = t.id === tab;
 
-  return (
+        return (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{ padding: "10px 16px", fontSize: 13, fontWeight: 600,
               color: active ? "#0b0b10" : "#6b7280",
               background: "transparent", border: "none",
               borderBottom: active ? "2px solid #6d28d9" : "2px solid transparent",
-              cursor: "pointer", marginBottom: -1 }}>
+              cursor: "pointer", marginBottom: -1, whiteSpace: "nowrap", flexShrink: 0 }}>
             {t.label}
           </button>
         );
@@ -577,21 +626,21 @@ export default function AdminPage() {
     <div style={{ minHeight: "100vh", background: "#f8f8fa", display: "flex", flexDirection: "column" }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      <header style={{ background: "white", borderBottom: "1px solid #e5e7eb", padding: "0 24px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <header className="admin-header" style={{ background: "white", borderBottom: "1px solid #e5e7eb", padding: "0 16px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", minHeight: 56, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "8px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <Link href="/dapp" style={{ display: "flex", alignItems: "center", gap: 6, textDecoration: "none", color: "#6b7280", fontSize: 13, fontWeight: 500 }}>
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 12L6 8l4-4" /></svg>
-              Back to app
+              <span className="admin-back-text">Back</span>
             </Link>
-            <div style={{ width: 1, height: 18, background: "#e5e7eb" }} />
+            <div className="admin-divider" style={{ width: 1, height: 18, background: "#e5e7eb" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#0b0b10,#374151)", display: "grid", placeItems: "center" }}>
                 <svg viewBox="0 0 16 16" width="14" height="14" fill="white"><path d="M8 1a5 5 0 100 10A5 5 0 008 1zm0 8a3 3 0 110-6 3 3 0 010 6zm4.5 1.5a.5.5 0 01.5.5v.5a.5.5 0 01-.5.5H3.5a.5.5 0 01-.5-.5V11a.5.5 0 01.5-.5h9z"/></svg>
               </div>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#0b0b10", letterSpacing: "-0.02em" }}>Veil Admin</div>
-                <div style={{ fontSize: 10.5, color: "#9ca3af", fontFamily: "var(--font-mono),monospace" }}>
+                <div className="admin-auth-sub" style={{ fontSize: 10.5, color: "#9ca3af", fontFamily: "var(--font-mono),monospace" }}>
                   Auth: server-side allowlist
                 </div>
               </div>
@@ -600,7 +649,7 @@ export default function AdminPage() {
 
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {connected && !loading && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+              <div className="admin-role-badge" style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700,
                 background: isAuthorized ? "#f0fdf4" : "#fef2f2",
                 border: `1px solid ${isAuthorized ? "#bbf7d0" : "#fecaca"}`,
                 color: isAuthorized ? "#059669" : "#dc2626" }}>
@@ -659,7 +708,7 @@ export default function AdminPage() {
       )}
 
       {connected && !loading && isAuthorized && (
-        <div style={{ flex: 1, maxWidth: 1100, margin: "0 auto", width: "100%", padding: "24px 24px 48px" }}>
+        <div className="admin-content" style={{ flex: 1, maxWidth: 1100, margin: "0 auto", width: "100%", padding: "24px 16px 48px" }}>
           <TabBar tab={tab} setTab={setTab} isSuperAdmin={isSuperAdmin} />
           {tab === "pools"     && <PoolsView />}
           {tab === "init"      && <InitPoolPanel />}
