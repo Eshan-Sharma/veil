@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { fetchPythPrices, PythPrices } from "../../../lib/pyth/prices";
+import { fetchPythPrices, type PythPrices } from "@/lib/pyth/prices";
 
 const STALE_PRICES: PythPrices = { usdc: 1.0 };
 
@@ -9,7 +9,7 @@ const STALE_PRICES: PythPrices = { usdc: 1.0 };
  * React hook that polls Pyth Hermes every `intervalMs` milliseconds.
  * Returns a map of poolId → USD price (null while loading or on error).
  */
-export function usePythPrices(intervalMs = 10_000): PythPrices {
+export const usePythPrices = (intervalMs = 10_000): PythPrices => {
   const [prices, setPrices] = useState<PythPrices>(STALE_PRICES);
 
   useEffect(() => {
@@ -32,5 +32,6 @@ export function usePythPrices(intervalMs = 10_000): PythPrices {
       clearInterval(timer);
     };
   }, [intervalMs]);
+
   return prices;
-}
+};
