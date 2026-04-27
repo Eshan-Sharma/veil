@@ -1,23 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+
 import { useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
+
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import { buildExplorerTxUrl } from "@/lib/solana/rpc";
-import { PublicKey } from "@solana/web3.js";
-import Link from "next/link";
-import { useVeilActions } from "../hooks/useVeilActions";
 import { usePools, type PoolView } from "@/lib/veil/usePools";
 
-const SYMBOL_ICONS: Record<string, { icon: string; color: string }> = {
-  SOL:  { icon: "◎", color: "#7c3aed" },
-  BTC:  { icon: "₿", color: "#f97316" },
-  ETH:  { icon: "Ξ", color: "#6366f1" },
-  XAU:  { icon: "◈", color: "#ca8a04" },
-  USDC: { icon: "$", color: "#2563eb" },
-};
-const DEFAULT_ICON = { icon: "●", color: "#6b7280" };
+import { formatHF } from "../lib/format";
+import { useVeilActions } from "../hooks/useVeilActions";
+import { getPoolMeta } from "../lib/tokens";
 
 type UnhealthyRow = {
   position_address: string;
@@ -28,15 +24,6 @@ type UnhealthyRow = {
   last_synced_at: string;
 };
 
-const WAD = 1_000_000_000_000_000_000n;
-function fmtHF(raw: string): string {
-  const v = BigInt(raw);
-  if (v >= 1n << 100n) return "∞";
-  const whole = v / WAD;
-  const frac = ((v % WAD) * 100n) / WAD;
-  return `${whole}.${String(frac).padStart(2, "0")}`;
-}
-
 export default function LiquidatePage() {
   const { publicKey } = useWallet();
   const rpc = useSolanaRpc();
@@ -46,10 +33,12 @@ export default function LiquidatePage() {
   const [borrower, setBorrower] = useState("");
   const [borrowerErr, setBorrowerErr] = useState<string | null>(null);
 
-  // ── Unhealthy-positions scan ─────────────────────────────────────────────
   const [unhealthy, setUnhealthy] = useState<UnhealthyRow[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanErr, setScanErr] = useState<string | null>(null);
+
+  const busy = ["building", "signing", "confirming"].includes(status);
+  const selected = pools[selectedIdx];
 
   async function scanUnhealthy() {
     setScanning(true); setScanErr(null);
@@ -64,6 +53,7 @@ export default function LiquidatePage() {
       setScanning(false);
     }
   }
+
   useEffect(() => { void scanUnhealthy(); }, []);
 
   function handleSubmit() {
@@ -74,10 +64,6 @@ export default function LiquidatePage() {
     catch { setBorrowerErr("Invalid wallet pubkey"); return; }
     void liquidate(pools[selectedIdx], pk);
   }
-
-  const busy = ["building", "signing", "confirming"].includes(status);
-  const selected = pools[selectedIdx];
-  const meta = selected ? (SYMBOL_ICONS[selected.symbol] ?? DEFAULT_ICON) : DEFAULT_ICON
 
   return (
     <div style={{ minHeight: "100vh", background: "#f8f8fa" }}>
@@ -138,7 +124,7 @@ export default function LiquidatePage() {
                     owner {u.owner.slice(0, 6)}…{u.owner.slice(-4)}
                   </span>
                   <span style={{ fontFamily: "var(--font-mono),monospace", color: "#dc2626", fontWeight: 700 }}>
-                    HF {fmtHF(u.health_factor_wad)}
+                    HF {formatHF(u.health_factor_wad).label}
                   </span>
                   <button
                     onClick={() => { setBorrower(u.owner); }}
@@ -161,9 +147,9 @@ export default function LiquidatePage() {
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {pools.map((p, i) => {
                   const sel = i === selectedIdx;
-                  const m = SYMBOL_ICONS[p.symbol] ?? DEFAULT_ICON
+                  const m = getPoolMeta(p.symbol);
 
-  return (
+                  return (
                     <button key={p.poolAddress.toBase58()} onClick={() => setSelectedIdx(i)}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 999,
                         border: `1px solid ${sel ? m.color : "#e5e7eb"}`,
