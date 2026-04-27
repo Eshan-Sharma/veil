@@ -1,9 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { usePythPrices } from "@/app/dapp/hooks/usePythPrices";
+
+const fmt = (n: number) => n >= 1_000 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
 
 export const PrivacyDemo = () => {
   const [veil, setVeil] = useState(true);
+  const prices = usePythPrices();
+  const btcPrice = prices.btc ?? 103_000;
+
+  // Derive all demo values from live BTC price
+  const collateral = 1.8421;
+  const collateralUsd = collateral * btcPrice;
+  const borrowed = Math.round(collateralUsd * 0.62);
+  const liqThreshold = 0.80;
+  const liqPrice = Math.round(borrowed / (collateral * liqThreshold));
+  const hf = (collateralUsd * liqThreshold) / borrowed;
+  const utilPct = ((borrowed / collateralUsd) * 100).toFixed(1);
 
   const row = (label: string, value: string, ct: string) => (
     <div className="flex items-center justify-between border-b border-zinc-100 py-3 last:border-b-0">
@@ -43,7 +57,7 @@ export const PrivacyDemo = () => {
                 "No visible collateral ratio — no liquidation targeting",
                 "No visible borrow amount — no strategy leakage",
                 "No visible liq price — no front-running your unwind",
-                "Invariants like health ≥ 1 still hold, verifiably",
+                "Invariants like health \u2265 1 still hold, verifiably",
               ].map((t) => (
                 <li key={t} className="flex items-start gap-3 text-[14.5px] text-zinc-700">
                   <span className="mt-0.5 grid h-5 w-5 place-items-center rounded-full bg-violet-100 text-violet-700 ring-1 ring-violet-200">
@@ -90,17 +104,17 @@ export const PrivacyDemo = () => {
               </div>
 
               <div className="rounded-2xl border border-zinc-100 bg-white/80 p-4">
-                {row("Collateral", "1.8421 BTC", "◉◉◉.◉◉◉◉ BTC")}
-                {row("Borrowed", "$84,203 USDC", "$◉◉,◉◉◉ USDC")}
-                {row("Liq. price", "$46,218", "$◉◉,◉◉◉")}
-                {row("Health factor", "1.18×", "◉.◉◉×")}
-                {row("Utilization", "62.4%", "◉◉.◉%")}
+                {row("Collateral", `${collateral} BTC (${fmt(collateralUsd)})`, "\u25C9\u25C9\u25C9.\u25C9\u25C9\u25C9\u25C9 BTC")}
+                {row("Borrowed", `${fmt(borrowed)} USDC`, "$\u25C9\u25C9,\u25C9\u25C9\u25C9 USDC")}
+                {row("Liq. price", fmt(liqPrice), "$\u25C9\u25C9,\u25C9\u25C9\u25C9")}
+                {row("Health factor", `${hf.toFixed(2)}\u00D7`, "\u25C9.\u25C9\u25C9\u00D7")}
+                {row("Utilization", `${utilPct}%`, "\u25C9\u25C9.\u25C9%")}
               </div>
 
               <div className="mt-4 flex items-center gap-2 rounded-2xl bg-zinc-50 px-3 py-2.5 text-[12px] text-zinc-600">
                 <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" className="text-violet-600"><path d="M8 1l2 5 5 1-4 3 1 5-4-3-4 3 1-5-4-3 5-1z"/></svg>
                 <span className="mono">
-                  {veil ? "getAccount() → ct:  7fA9·E4b2·88aD" : "getAccount() → plaintext visible"}
+                  {veil ? "getAccount() \u2192 ct:  7fA9\u00B7E4b2\u00B788aD" : "getAccount() \u2192 plaintext visible"}
                 </span>
               </div>
             </div>
