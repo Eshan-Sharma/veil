@@ -27,7 +27,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{LendingPool, UserPosition},
+    state::{check_program_owner, LendingPool, UserPosition},
 };
 
 pub struct Repay {
@@ -46,7 +46,7 @@ impl Repay {
         })
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 6 {
             return Err(LendError::InvalidInstructionData.into());
         }
@@ -56,6 +56,10 @@ impl Repay {
         if self.amount == 0 {
             return Err(LendError::ZeroAmount.into());
         }
+
+        // ── Owner checks ─────────────────────────────────────────────────
+        check_program_owner(&accounts[3], program_id)?; // pool
+        check_program_owner(&accounts[4], program_id)?; // user_position
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;

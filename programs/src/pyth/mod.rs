@@ -8,6 +8,7 @@ Legacy `PriceAccount` layout offsets used here:
   0   u32  magic  (must be 0xa1b2c3d4)
   8   u32  atype  (must be 3 = Price)
  20   i32  expo
+176   i64  timestamp  (last aggregation publish time)
 208   i64  agg.price
 216   u64  agg.conf
 224   u32  agg.status  (must be 1 = Trading)
@@ -28,6 +29,8 @@ pub struct PythPrice {
     pub price: i64,
     pub conf:  u64,
     pub expo:  i32,
+    /// Unix timestamp of the last aggregation publish.
+    pub timestamp: i64,
 }
 
 /// Read and validate the aggregate price from a Pyth legacy push-oracle account.
@@ -52,9 +55,10 @@ pub fn read_price(account: &AccountView) -> Result<PythPrice, ProgramError> {
         return Err(LendError::OracleInvalid.into());
     }
 
-    let expo  = i32::from_le_bytes(data[20..24].try_into().unwrap());
-    let price = i64::from_le_bytes(data[208..216].try_into().unwrap());
-    let conf  = u64::from_le_bytes(data[216..224].try_into().unwrap());
+    let expo      = i32::from_le_bytes(data[20..24].try_into().unwrap());
+    let timestamp = i64::from_le_bytes(data[176..184].try_into().unwrap());
+    let price     = i64::from_le_bytes(data[208..216].try_into().unwrap());
+    let conf      = u64::from_le_bytes(data[216..224].try_into().unwrap());
 
     // Aggregate status must be Trading.
     let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
@@ -74,5 +78,5 @@ pub fn read_price(account: &AccountView) -> Result<PythPrice, ProgramError> {
         return Err(LendError::OracleConfTooWide.into());
     }
 
-    Ok(PythPrice { price, conf, expo })
+    Ok(PythPrice { price, conf, expo, timestamp })
 }
