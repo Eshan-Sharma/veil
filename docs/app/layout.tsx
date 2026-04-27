@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import type { ReactNode } from 'react'
+import { Head } from 'nextra/components'
 
 export const metadata: Metadata = {
   title: {
@@ -20,6 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
+      <Head />
       <body>{children}</body>
     </html>
   )
