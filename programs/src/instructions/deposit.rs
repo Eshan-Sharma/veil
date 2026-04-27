@@ -30,7 +30,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{LendingPool, UserPosition},
+    state::{check_program_owner, LendingPool, UserPosition},
 };
 
 pub struct Deposit {
@@ -105,6 +105,9 @@ impl Deposit {
         if self.amount == 0 {
             return Err(LendError::ZeroAmount.into());
         }
+
+        // ── Owner checks ─────────────────────────────────────────────────
+        check_program_owner(&accounts[3], program_id)?; // pool
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;

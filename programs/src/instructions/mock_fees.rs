@@ -3,6 +3,8 @@ MockFees — Inject dummy fees into a pool for testing.
 ONLY FOR TESTING/SHOWCASE.
 */
 
+#![cfg(feature = "testing")]
+
 use pinocchio::{account::AccountView, Address, ProgramResult};
 use crate::errors::LendError;
 use crate::state::LendingPool;

@@ -9,6 +9,7 @@ mod ika_release;
 mod ika_sign;
 mod initialize;
 mod liquidate;
+#[cfg(feature = "testing")]
 mod mock_fees;
 mod pause_pool;
 mod private_borrow;
@@ -32,6 +33,7 @@ pub use ika_release::IkaRelease;
 pub use ika_sign::IkaSign;
 pub use initialize::Initialize;
 pub use liquidate::Liquidate;
+#[cfg(feature = "testing")]
 pub use mock_fees::MockFees;
 pub use pause_pool::PausePool;
 pub use private_borrow::PrivateBorrow;

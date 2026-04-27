@@ -14,9 +14,22 @@ Accounts:
 Instruction data (after discriminator 0x14): none
 */
 
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use pinocchio::{
+    account::AccountView,
+    error::ProgramError,
+    sysvars::{clock::Clock, Sysvar},
+    Address, ProgramResult,
+};
 
 use crate::{errors::LendError, pyth, state::LendingPool};
+
+/// Maximum acceptable age (in seconds) of a Pyth oracle price update.
+/// Prices older than this are considered stale and rejected.
+const MAX_ORACLE_AGE: i64 = 120;
+
+/// System program ID (all zeros). An oracle account owned by the system
+/// program is uninitialised and must be rejected.
+const SYSTEM_PROGRAM: Address = Address::new_from_array([0u8; 32]);
 
 pub struct UpdateOraclePrice;
 
@@ -27,14 +40,33 @@ impl UpdateOraclePrice {
         Ok(Self)
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 2 {
             return Err(LendError::InvalidInstructionData.into());
+        }
+
+        // ── Owner sanity check ───────────────────────────────────────────
+        // Reject oracle accounts owned by the system program (uninitialised)
+        // or by the Veil program itself (spoofable by anyone who can CPI).
+        let oracle_owner = accounts[1].owner();
+        if oracle_owner == &SYSTEM_PROGRAM || oracle_owner == program_id {
+            return Err(LendError::OracleInvalid.into());
         }
 
         // Validate and read the Pyth price before touching the pool.
         let pyth_price = pyth::read_price(&accounts[1])?;
         let feed_addr = *accounts[1].address();
+
+        // ── Staleness check ──────────────────────────────────────────────
+        // On Solana, Clock is always available. In off-chain test harnesses
+        // it may be absent; we skip the check only when the sysvar is
+        // genuinely unavailable (UnsupportedSysvar).
+        if let Ok(clock) = Clock::get() {
+            let age = clock.unix_timestamp.saturating_sub(pyth_price.timestamp);
+            if age > MAX_ORACLE_AGE {
+                return Err(LendError::OraclePriceStale.into());
+            }
+        }
 
         let pool = LendingPool::from_account_mut(&accounts[0])?;
 

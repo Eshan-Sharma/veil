@@ -37,6 +37,8 @@ const DWALLET:   [u8; 32] = [4u8; 32];
 const FEED_A:    [u8; 32] = [0xAAu8; 32]; // primary Pyth feed key
 const FEED_B:    [u8; 32] = [0xBBu8; 32]; // different feed key (substitution attack)
 const PROGRAM: pinocchio::Address = pinocchio::Address::new_from_array([9u8; 32]);
+/// Fake Pyth oracle program owner for test accounts.
+const PYTH_OWNER: [u8; 32] = [0xD6u8; 32];
 
 // ── Pyth helpers ──────────────────────────────────────────────────────────────
 
@@ -67,6 +69,9 @@ fn make_pyth_bytes(price: i64, conf: u64, expo: i32, status: u32) -> Vec<u8> {
     data[4..8].copy_from_slice(&2u32.to_le_bytes());
     data[8..12].copy_from_slice(&3u32.to_le_bytes());
     data[20..24].copy_from_slice(&expo.to_le_bytes());
+    // Timestamp at offset 176 — use a recent value so staleness checks pass.
+    let recent_ts: i64 = 1_700_000_000;
+    data[176..184].copy_from_slice(&recent_ts.to_le_bytes());
     data[208..216].copy_from_slice(&price.to_le_bytes());
     data[216..224].copy_from_slice(&conf.to_le_bytes());
     data[224..228].copy_from_slice(&status.to_le_bytes());
@@ -368,7 +373,7 @@ fn core_rate_jump_above_kink_is_significant() {
 fn core_oracle_valid_price_accepted() {
     let pyth = valid_pyth(16_842_000_000, -8); // $168.42
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -380,7 +385,7 @@ fn core_oracle_valid_price_accepted() {
 fn core_oracle_caches_price_in_pool() {
     let pyth = valid_pyth(16_842_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -394,7 +399,7 @@ fn core_oracle_caches_price_in_pool() {
 fn core_oracle_anchors_feed_on_first_call() {
     let pyth = valid_pyth(10_000_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -410,7 +415,7 @@ fn core_oracle_attack_feed_substitution_rejected() {
     let pyth_b = valid_pyth(10_000_000_000, -8);
     let pool_data = unanchored_pool();
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_data);
-    let mut pyth_a_acct = RawAccount::new(FEED_A, false, false, &pyth_a);
+    let mut pyth_a_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth_a);
     unsafe {
         let mut accounts = [pool_acct.view(), pyth_a_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -424,7 +429,7 @@ fn core_oracle_attack_feed_substitution_rejected() {
         .to_vec()
     };
     let mut pool_acct2 = RawAccount::new([0u8; 32], false, true, &updated_bytes);
-    let mut pyth_b_acct = RawAccount::new(FEED_B, false, false, &pyth_b);
+    let mut pyth_b_acct = RawAccount::new_with_owner(FEED_B, PYTH_OWNER, false, false, &pyth_b);
     let result = unsafe {
         let mut accounts = [pool_acct2.view(), pyth_b_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -438,7 +443,7 @@ fn core_oracle_attack_wrong_magic_rejected() {
     let mut bad = make_pyth_bytes(10_000_000_000, 1, -8, 1);
     bad[0..4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes()); // corrupt magic
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -451,7 +456,7 @@ fn core_oracle_attack_wrong_atype_rejected() {
     let mut bad = make_pyth_bytes(10_000_000_000, 1, -8, 1);
     bad[8..12].copy_from_slice(&2u32.to_le_bytes()); // atype=2 is ProductAccount, not Price
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -464,7 +469,7 @@ fn core_oracle_attack_stale_status_rejected() {
     // status=0 means Unknown (not Trading)
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 0);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -477,7 +482,7 @@ fn core_oracle_attack_halted_status_rejected() {
     // status=2 means Halted
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 2);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -489,7 +494,7 @@ fn core_oracle_attack_halted_status_rejected() {
 fn core_oracle_attack_zero_price_rejected() {
     let bad = make_pyth_bytes(0, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -501,7 +506,7 @@ fn core_oracle_attack_zero_price_rejected() {
 fn core_oracle_attack_negative_price_rejected() {
     let bad = make_pyth_bytes(-1, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -514,7 +519,7 @@ fn core_oracle_attack_short_account_rejected() {
     // Account with only 100 bytes — too short for any Pyth field reads
     let short = vec![0xd4u8, 0xc3, 0xb2, 0xa1, 0, 0, 0, 0, 3, 0, 0, 0]; // magic+ver+atype only
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &short);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &short);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -525,7 +530,7 @@ fn core_oracle_attack_short_account_rejected() {
 #[test]
 fn core_oracle_attack_empty_account_rejected() {
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &[]);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &[]);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -538,7 +543,7 @@ fn core_oracle_attack_confidence_too_wide_rejected() {
     // price = 1_000_000, conf = 21_000 → conf/price = 2.1% > 2% threshold
     let bad = make_pyth_bytes(1_000_000, 21_000, -6, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -553,7 +558,7 @@ fn core_oracle_confidence_exactly_at_2pct_boundary_accepted() {
     // check: conf * 50 = 1_000_000 = price → NOT > price, so OK
     let ok = make_pyth_bytes(1_000_000, 20_000, -6, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &ok);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &ok);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -566,7 +571,7 @@ fn core_oracle_second_valid_update_with_same_feed_accepted() {
     let pyth1 = valid_pyth(10_000_000_000, -8);
     let pyth2 = valid_pyth(10_100_000_000, -8); // price moved slightly
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth1);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth1);
     unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -581,7 +586,7 @@ fn core_oracle_second_valid_update_with_same_feed_accepted() {
         .to_vec()
     };
     let mut pool_acct2 = RawAccount::new([0u8; 32], false, true, &updated_bytes);
-    let mut pyth_acct2 = RawAccount::new(FEED_A, false, false, &pyth2);
+    let mut pyth_acct2 = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth2);
     let result = unsafe {
         let mut accounts = [pool_acct2.view(), pyth_acct2.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -815,7 +820,7 @@ fn enc_swapping_deposit_and_debt_ciphertext_accounts_is_rejected() {
 fn enc_oracle_valid_price_serves_encrypted_pool() {
     let pyth = valid_pyth(3_240_000_000_000, -8); // $32,400 (BTC-ish)
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -832,7 +837,7 @@ fn enc_oracle_update_on_pool_a_does_not_mutate_pool_b_cache() {
     let pyth = valid_pyth(3_240_000_000_000, -8);
     let mut pool_a = RawAccount::new([0xA1u8; 32], false, true, &unanchored_pool());
     let pool_b = RawAccount::new([0xB1u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
 
     unsafe {
         let mut accounts = [pool_a.view(), pyth_acct.view()];
@@ -970,7 +975,7 @@ fn enc_oracle_attack_manipulated_price_with_wide_conf_rejected() {
     // price = 5_000_000, conf = 101_000 → conf/price ≈ 2.02% > 2% → OracleConfTooWide
     let bad = make_pyth_bytes(5_000_000, 101_000, -6, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -984,7 +989,7 @@ fn enc_oracle_attack_halted_feed_on_encrypted_pool_rejected() {
     // During market closure, encrypted borrowers cannot manipulate prices.
     let bad = make_pyth_bytes(10_000_000_000, 1, -8, 2); // status=Halted
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -998,7 +1003,7 @@ fn enc_oracle_attack_substitution_on_encrypted_pool_rejected() {
     let pyth_a = valid_pyth(10_000_000_000, -8);
     let pyth_b = valid_pyth(10_000_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_a_acct = RawAccount::new(FEED_A, false, false, &pyth_a);
+    let mut pyth_a_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth_a);
     unsafe {
         let mut accounts = [pool_acct.view(), pyth_a_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -1012,7 +1017,7 @@ fn enc_oracle_attack_substitution_on_encrypted_pool_rejected() {
         .to_vec()
     };
     let mut pool2 = RawAccount::new([0u8; 32], false, true, &anchored_bytes);
-    let mut pyth_b_acct = RawAccount::new(FEED_B, false, false, &pyth_b);
+    let mut pyth_b_acct = RawAccount::new_with_owner(FEED_B, PYTH_OWNER, false, false, &pyth_b);
     let result = unsafe {
         let mut accounts = [pool2.view(), pyth_b_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1024,7 +1029,7 @@ fn enc_oracle_attack_substitution_on_encrypted_pool_rejected() {
 fn enc_oracle_attack_short_data_on_encrypted_pool_rejected() {
     let short = vec![0u8; 100];
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &short);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &short);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1407,7 +1412,7 @@ fn ika_oracle_valid_btc_price_accepted() {
     // BTC at ~$61,200 (expo -8)
     let pyth = valid_pyth(61_200_00_000_000, -8);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1423,7 +1428,7 @@ fn ika_oracle_attack_substitute_btc_feed_with_cheaper_feed() {
     let fake_price= valid_pyth(61_200_00_000_000, -8);
 
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut feed_a = RawAccount::new(FEED_A, false, false, &btc_price);
+    let mut feed_a = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &btc_price);
     unsafe {
         let mut accounts = [pool_acct.view(), feed_a.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -1437,7 +1442,7 @@ fn ika_oracle_attack_substitute_btc_feed_with_cheaper_feed() {
         .to_vec()
     };
     let mut pool2   = RawAccount::new([0u8; 32], false, true, &anchored_bytes);
-    let mut feed_b  = RawAccount::new(FEED_B, false, false, &fake_price);
+    let mut feed_b  = RawAccount::new_with_owner(FEED_B, PYTH_OWNER, false, false, &fake_price);
     let result = unsafe {
         let mut accounts = [pool2.view(), feed_b.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1452,7 +1457,7 @@ fn ika_oracle_attack_wide_conf_during_btc_volatility_rejected() {
     // conf = 1_224_000_000_001 → rejected.
     let bad = make_pyth_bytes(61_200_00_000_000i64, 1_224_000_000_001u64, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1464,7 +1469,7 @@ fn ika_oracle_attack_wide_conf_during_btc_volatility_rejected() {
 fn ika_oracle_attack_negative_btc_price_rejected() {
     let bad = make_pyth_bytes(-1, 0, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1482,7 +1487,7 @@ fn ika_oracle_attack_crafted_non_pyth_account_rejected() {
     crafted[208..216].copy_from_slice(&1_000_000_000_000i64.to_le_bytes()); // price
     crafted[224..228].copy_from_slice(&1u32.to_le_bytes());        // status=Trading
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &crafted);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &crafted);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1589,7 +1594,7 @@ fn ika_enc_oracle_valid_price_serves_ika_encrypted_pool() {
     // Pool used for cross-chain + encrypted positions uses the same oracle.
     let pyth = valid_pyth(168_42_000_000, -8); // $168.42 SOL price
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &pyth);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &pyth);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1604,7 +1609,7 @@ fn ika_enc_oracle_attack_flash_loan_widens_conf_rejected() {
     // price = 1_000_000_000, conf = 20_000_001 → 2.0000001% > 2% → rejected
     let bad = make_pyth_bytes(1_000_000_000, 20_000_001, -8, 1);
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut pyth_acct = RawAccount::new(FEED_A, false, false, &bad);
+    let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &bad);
     let result = unsafe {
         let mut accounts = [pool_acct.view(), pyth_acct.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1620,7 +1625,7 @@ fn ika_enc_oracle_attack_feed_substitution_on_combined_pool_rejected() {
     let fake_pyth = valid_pyth(99_999_999_999, -8); // inflated price on fake feed
 
     let mut pool_acct = RawAccount::new([0u8; 32], false, true, &unanchored_pool());
-    let mut feed_real = RawAccount::new(FEED_A, false, false, &real_pyth);
+    let mut feed_real = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, &real_pyth);
     unsafe {
         let mut accounts = [pool_acct.view(), feed_real.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts).unwrap();
@@ -1634,7 +1639,7 @@ fn ika_enc_oracle_attack_feed_substitution_on_combined_pool_rejected() {
         .to_vec()
     };
     let mut pool2     = RawAccount::new([0u8; 32], false, true, &anchored_bytes);
-    let mut feed_fake = RawAccount::new(FEED_B, false, false, &fake_pyth);
+    let mut feed_fake = RawAccount::new_with_owner(FEED_B, PYTH_OWNER, false, false, &fake_pyth);
     let result = unsafe {
         let mut accounts = [pool2.view(), feed_fake.view()];
         UpdateOraclePrice.process(&PROGRAM, &mut accounts)
@@ -1667,7 +1672,7 @@ fn ika_enc_oracle_attack_all_six_vectors_in_sequence() {
 
     for (label, pyth_bytes, expected_err) in cases {
         let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_data);
-        let mut pyth_acct = RawAccount::new(FEED_A, false, false, pyth_bytes);
+        let mut pyth_acct = RawAccount::new_with_owner(FEED_A, PYTH_OWNER, false, false, pyth_bytes);
         let result = unsafe {
             let mut accounts = [pool_acct.view(), pyth_acct.view()];
             UpdateOraclePrice.process(&PROGRAM, &mut accounts)
