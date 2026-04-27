@@ -1,8 +1,8 @@
 programs/target/
+programs/.next/
 docs/.next/
 docs/node_modules/
 docs/public/_pagefind/
-programs/target/
 veil-landing/.next/
 veil-landing/node_modules/
 *.tsbuildinfo
@@ -11,3 +11,8 @@ PRIVATE_ROADMAP.md
 .env
 veil-landing/.env.*
 !veil-landing/.env.example
+test-ledger/
+.agents/
+.claude/
+skills-lock.json
+
