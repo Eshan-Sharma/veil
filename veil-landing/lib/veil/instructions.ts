@@ -3,7 +3,6 @@ import {
   SystemProgram,
   TransactionInstruction,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID as SPL_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   PROGRAM_ID,
   SYSTEM_PROGRAM_ID,
@@ -17,20 +16,29 @@ function u8(n: number): Uint8Array {
 }
 
 function u64LE(n: bigint): Uint8Array {
-  const buf = Buffer.allocUnsafe(8);
-  buf.writeBigUInt64LE(n);
+  const buf = new Uint8Array(8);
+  const dv = new DataView(buf.buffer);
+  dv.setBigUint64(0, n, true);
   return buf;
 }
 
 function u128LE(n: bigint): Uint8Array {
-  const buf = Buffer.allocUnsafe(16);
-  buf.writeBigUInt64LE(n & 0xFFFFFFFFFFFFFFFFn, 0);
-  buf.writeBigUInt64LE(n >> 64n, 8);
+  const buf = new Uint8Array(16);
+  const dv = new DataView(buf.buffer);
+  dv.setBigUint64(0, n & 0xFFFFFFFFFFFFFFFFn, true);
+  dv.setBigUint64(8, n >> 64n, true);
   return buf;
 }
 
 function concat(...parts: Uint8Array[]): Buffer {
-  return Buffer.concat(parts);
+  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+  const result = Buffer.allocUnsafe(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
 }
 
 // ─── Initialize (discriminator 0x00) ─────────────────────────────────────────
@@ -465,5 +473,20 @@ export function updateOraclePriceIx(
       { pubkey: pythPriceFeed, isSigner: false, isWritable: false },
     ],
     data: Buffer.from([0x14]),
+  });
+}
+
+/** ONLY FOR TESTING: Inject 100 tokens of fees into the pool state. */
+export function mockFeesIx(
+  authority: PublicKey,
+  pool: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: pool, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([0xFE]),
   });
 }

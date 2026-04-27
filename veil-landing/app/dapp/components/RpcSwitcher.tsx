@@ -6,13 +6,12 @@ import { getRpcLabel, type SolanaRpcPreset } from "@/lib/solana/rpc";
 
 const presets: SolanaRpcPreset[] = ["devnet", "mainnet", "localnet", "custom"];
 
-export function RpcSwitcher({
-  open,
-  onClose,
-}: {
+interface RpcSwitcherProps {
   open: boolean;
   onClose: () => void;
-}) {
+}
+
+export const RpcSwitcher = ({ open, onClose }: RpcSwitcherProps) => {
   const { preset, customRpc, endpoint, setPreset, setCustomRpc } = useSolanaRpc();
   const [draft, setDraft] = useState(customRpc);
 
@@ -22,12 +21,12 @@ export function RpcSwitcher({
 
   if (!open) return null;
 
-  function applyCustomRpc() {
+  const applyCustomRpc = () => {
     const trimmed = draft.trim();
     if (!trimmed) return;
     setCustomRpc(trimmed);
     setPreset("custom");
-  }
+  };
 
   return (
     <>
