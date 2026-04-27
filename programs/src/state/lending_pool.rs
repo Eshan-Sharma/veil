@@ -17,7 +17,8 @@ Layout (repr C, 408 bytes, 16-byte aligned throughout):
 | 137    |   1  | pool_bump              |
 | 138    |   1  | vault_bump             |
 | 139    |   1  | paused                 |
-| 140    |   4  | _pad                   |
+| 140    |   1  | token_decimals         |
+| 141    |   3  | _pad                   |
 | 144    |  16  | borrow_index           |
 | 160    |  16  | supply_index           |
 | 176    |  16  | base_rate              |
@@ -70,7 +71,10 @@ pub struct LendingPool {
     pub vault_bump: u8,
     /// Non-zero when the pool is paused; deposits and borrows are blocked.
     pub paused: u8,
-    pub _pad: [u8; 4],
+    /// SPL-token mint decimals (6 for USDC, 9 for SOL, 8 for BTC).
+    /// Used to normalize token amounts to USD in cross-collateral calculations.
+    pub token_decimals: u8,
+    pub _pad: [u8; 3],
 
     // ── Interest indices (WAD = 1e18) ─────────────────────────────────────
     pub borrow_index: u128,

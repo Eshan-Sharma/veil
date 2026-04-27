@@ -59,6 +59,10 @@ pub enum LendError {
     OraclePriceFeedMismatch,
     /// Pyth confidence interval exceeds 2 % of price — data too uncertain.
     OracleConfTooWide,
+    /// Position is used as cross-collateral; use CrossWithdraw instead.
+    CrossCollateralActive,
+    /// Pool has no oracle anchored — cannot do cross-collateral operations.
+    OracleNotAnchored,
 }
 
 impl From<LendError> for ProgramError {

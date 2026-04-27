@@ -13,10 +13,15 @@ import {
   liquidateIx,
   flashBorrowIx,
   flashRepayIx,
+  crossBorrowIx,
+  crossWithdrawIx,
+  crossRepayIx,
+  crossLiquidateIx,
   findPoolAuthorityAddress,
   findPositionAddress,
   TOKEN_PROGRAM_ID,
 } from "@/lib/veil";
+import type { CollateralPair } from "@/lib/veil/instructions";
 import type { PoolView } from "@/lib/veil/usePools";
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
@@ -189,5 +194,99 @@ export const useVeilActions = () => {
     [publicKey, connection, endpoint, sendTransaction]
   );
 
-  return { deposit, withdraw, borrow, repay, liquidate, flashExecute, status, txSig, errorMsg, reset };
+  const crossBorrow = useCallback(
+    async (borrowPool: PoolView, collateralPools: PoolView[], amount: bigint) => {
+      if (!publicKey) return;
+      const [borrowAuth] = findPoolAuthorityAddress(borrowPool.poolAddress);
+      const [borrowPos] = findPositionAddress(borrowPool.poolAddress, publicKey);
+      const userBorrowToken = getAssociatedTokenAddressSync(borrowPool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+
+      const collPairs: CollateralPair[] = collateralPools.map((cp) => {
+        const [pos] = findPositionAddress(cp.poolAddress, publicKey);
+        return { pool: cp.poolAddress, position: pos };
+      });
+
+      await sendTx(
+        () => crossBorrowIx(publicKey, borrowPool.poolAddress, borrowPos, borrowPool.vault, userBorrowToken, borrowAuth, collPairs, amount),
+        { action: "cross_borrow", poolAddress: borrowPool.poolAddress.toBase58(), amount },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, endpoint, sendTransaction]
+  );
+
+  const crossWithdraw = useCallback(
+    async (pool: PoolView, relatedPools: PoolView[], shares: bigint) => {
+      if (!publicKey) return;
+      const [authority] = findPoolAuthorityAddress(pool.poolAddress);
+      const [position] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+
+      const relatedPairs: CollateralPair[] = relatedPools.map((rp) => {
+        const [pos] = findPositionAddress(rp.poolAddress, publicKey);
+        return { pool: rp.poolAddress, position: pos };
+      });
+
+      await sendTx(
+        () => crossWithdrawIx(publicKey, pool.poolAddress, position, pool.vault, userToken, authority, relatedPairs, shares),
+        { action: "cross_withdraw", poolAddress: pool.poolAddress.toBase58(), amount: shares },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, endpoint, sendTransaction]
+  );
+
+  const crossRepay = useCallback(
+    async (pool: PoolView, collateralPositions: PublicKey[], amount: bigint) => {
+      if (!publicKey) return;
+      const [position] = findPositionAddress(pool.poolAddress, publicKey);
+      const userToken = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+      await sendTx(
+        () => crossRepayIx(publicKey, userToken, pool.vault, pool.poolAddress, position, collateralPositions, amount),
+        { action: "cross_repay", poolAddress: pool.poolAddress.toBase58(), amount },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, endpoint, sendTransaction]
+  );
+
+  const crossLiquidate = useCallback(
+    async (
+      debtPool: PoolView,
+      collPool: PoolView,
+      borrower: PublicKey,
+      otherPools: PoolView[],
+      repayAmount: bigint,
+    ) => {
+      if (!publicKey) return;
+      const [debtPos] = findPositionAddress(debtPool.poolAddress, borrower);
+      const [collPos] = findPositionAddress(collPool.poolAddress, borrower);
+      const [collAuth] = findPoolAuthorityAddress(collPool.poolAddress);
+      const liquidatorDebtToken = getAssociatedTokenAddressSync(debtPool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+      const liquidatorCollToken = getAssociatedTokenAddressSync(collPool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+
+      const otherPairs: CollateralPair[] = otherPools.map((op) => {
+        const [pos] = findPositionAddress(op.poolAddress, borrower);
+        return { pool: op.poolAddress, position: pos };
+      });
+
+      await sendTx(
+        () => crossLiquidateIx(
+          publicKey, liquidatorDebtToken, liquidatorCollToken,
+          debtPool.poolAddress, debtPos, debtPool.vault,
+          collPool.poolAddress, collPos, collPool.vault,
+          collAuth, otherPairs, repayAmount,
+        ),
+        { action: "cross_liquidate", poolAddress: debtPool.poolAddress.toBase58(), amount: repayAmount },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicKey, connection, endpoint, sendTransaction]
+  );
+
+  return {
+    deposit, withdraw, borrow, repay, liquidate, flashExecute,
+    crossBorrow, crossWithdraw, crossRepay, crossLiquidate,
+    status, txSig, errorMsg, reset,
+  };
 };

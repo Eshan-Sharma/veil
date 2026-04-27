@@ -476,6 +476,40 @@ export function updateOraclePriceIx(
   });
 }
 
+/** ONLY FOR TESTING: Set oracle price/expo directly on a pool. */
+export function mockOracleIx(
+  authority: PublicKey,
+  pool: PublicKey,
+  price: bigint,
+  expo: number,
+): TransactionInstruction {
+  const data = concat(
+    u8(0xFD),
+    // i64 LE for price
+    (() => {
+      const buf = new Uint8Array(8);
+      const dv = new DataView(buf.buffer);
+      dv.setBigInt64(0, price, true);
+      return buf;
+    })(),
+    // i32 LE for expo
+    (() => {
+      const buf = new Uint8Array(4);
+      const dv = new DataView(buf.buffer);
+      dv.setInt32(0, expo, true);
+      return buf;
+    })(),
+  );
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: pool, isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+}
+
 /** ONLY FOR TESTING: Inject 100 tokens of fees into the pool state. */
 export function mockFeesIx(
   authority: PublicKey,
@@ -489,4 +523,202 @@ export function mockFeesIx(
     ],
     data: Buffer.from([0xFE]),
   });
+}
+
+// ─── SetPoolDecimals (discriminator 0x15) ────────────────────────────────────
+//
+// Accounts:
+//   [0] authority   signer
+//   [1] pool        writable
+//   [2] tokenMint   read-only
+
+export function setPoolDecimalsIx(
+  authority: PublicKey,
+  pool: PublicKey,
+  tokenMint: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: authority, isSigner: true, isWritable: false },
+      { pubkey: pool, isSigner: false, isWritable: true },
+      { pubkey: tokenMint, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([0x15]),
+  });
+}
+
+// ─── CrossBorrow (discriminator 0x16) ────────────────────────────────────────
+//
+// Accounts:
+//   [0]  user               signer, writable
+//   [1]  borrowPool         writable
+//   [2]  borrowPosition     writable
+//   [3]  borrowVault        writable
+//   [4]  userBorrowToken    writable
+//   [5]  borrowPoolAuth     read-only (PDA)
+//   [6]  tokenProgram
+//   [7..N] collateral pairs: (pool, position) — 2 accounts per collateral pool
+
+export type CollateralPair = {
+  pool: PublicKey;
+  position: PublicKey;
+};
+
+export function crossBorrowIx(
+  user: PublicKey,
+  borrowPool: PublicKey,
+  borrowPosition: PublicKey,
+  borrowVault: PublicKey,
+  userBorrowToken: PublicKey,
+  borrowPoolAuth: PublicKey,
+  collateralPairs: CollateralPair[],
+  amount: bigint,
+): TransactionInstruction {
+  const data = concat(u8(0x16), u64LE(amount));
+  const keys = [
+    { pubkey: user, isSigner: true, isWritable: true },
+    { pubkey: borrowPool, isSigner: false, isWritable: true },
+    { pubkey: borrowPosition, isSigner: false, isWritable: true },
+    { pubkey: borrowVault, isSigner: false, isWritable: true },
+    { pubkey: userBorrowToken, isSigner: false, isWritable: true },
+    { pubkey: borrowPoolAuth, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ...collateralPairs.flatMap((pair) => [
+      { pubkey: pair.pool, isSigner: false, isWritable: false },
+      { pubkey: pair.position, isSigner: false, isWritable: true },
+    ]),
+  ];
+
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
+}
+
+// ─── CrossWithdraw (discriminator 0x17) ──────────────────────────────────────
+//
+// Accounts:
+//   [0]  user              signer, writable
+//   [1]  withdrawPool      writable
+//   [2]  withdrawPosition  writable
+//   [3]  vault             writable
+//   [4]  userToken         writable
+//   [5]  poolAuthority     read-only
+//   [6]  tokenProgram
+//   [7..N] related pairs: (pool, position) for global HF check
+
+export function crossWithdrawIx(
+  user: PublicKey,
+  withdrawPool: PublicKey,
+  withdrawPosition: PublicKey,
+  vault: PublicKey,
+  userToken: PublicKey,
+  poolAuthority: PublicKey,
+  relatedPairs: CollateralPair[],
+  shares: bigint,
+): TransactionInstruction {
+  const data = concat(u8(0x17), u64LE(shares));
+  const keys = [
+    { pubkey: user, isSigner: true, isWritable: true },
+    { pubkey: withdrawPool, isSigner: false, isWritable: true },
+    { pubkey: withdrawPosition, isSigner: false, isWritable: true },
+    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: userToken, isSigner: false, isWritable: true },
+    { pubkey: poolAuthority, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ...relatedPairs.flatMap((pair) => [
+      { pubkey: pair.pool, isSigner: false, isWritable: false },
+      { pubkey: pair.position, isSigner: false, isWritable: false },
+    ]),
+  ];
+
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
+}
+
+// ─── CrossRepay (discriminator 0x18) ─────────────────────────────────────────
+//
+// Accounts:
+//   [0]  user           signer, writable
+//   [1]  userToken      writable
+//   [2]  vault          writable
+//   [3]  pool           writable
+//   [4]  userPosition   writable
+//   [5]  tokenProgram
+//   [6..N] collateral positions to clear (writable) — optional
+
+export function crossRepayIx(
+  user: PublicKey,
+  userToken: PublicKey,
+  vault: PublicKey,
+  pool: PublicKey,
+  userPosition: PublicKey,
+  collateralPositions: PublicKey[],
+  amount: bigint,
+): TransactionInstruction {
+  const data = concat(u8(0x18), u64LE(amount));
+  const keys = [
+    { pubkey: user, isSigner: true, isWritable: true },
+    { pubkey: userToken, isSigner: false, isWritable: true },
+    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: pool, isSigner: false, isWritable: true },
+    { pubkey: userPosition, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ...collateralPositions.map((pos) => ({
+      pubkey: pos,
+      isSigner: false,
+      isWritable: true,
+    })),
+  ];
+
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
+}
+
+// ─── CrossLiquidate (discriminator 0x19) ─────────────────────────────────────
+//
+// Accounts:
+//   [0]  liquidator            signer, writable
+//   [1]  liquidatorDebtToken   writable
+//   [2]  liquidatorCollToken   writable
+//   [3]  debtPool              writable
+//   [4]  debtPosition          writable
+//   [5]  debtVault             writable
+//   [6]  collPool              writable
+//   [7]  collPosition          writable
+//   [8]  collVault             writable
+//   [9]  collPoolAuthority     read-only
+//   [10] tokenProgram
+//   [11..N] other (pool, position) pairs for global HF check
+
+export function crossLiquidateIx(
+  liquidator: PublicKey,
+  liquidatorDebtToken: PublicKey,
+  liquidatorCollToken: PublicKey,
+  debtPool: PublicKey,
+  debtPosition: PublicKey,
+  debtVault: PublicKey,
+  collPool: PublicKey,
+  collPosition: PublicKey,
+  collVault: PublicKey,
+  collPoolAuthority: PublicKey,
+  otherPairs: CollateralPair[],
+  repayAmount: bigint,
+): TransactionInstruction {
+  const data = concat(u8(0x19), u64LE(repayAmount));
+  const keys = [
+    { pubkey: liquidator, isSigner: true, isWritable: true },
+    { pubkey: liquidatorDebtToken, isSigner: false, isWritable: true },
+    { pubkey: liquidatorCollToken, isSigner: false, isWritable: true },
+    { pubkey: debtPool, isSigner: false, isWritable: true },
+    { pubkey: debtPosition, isSigner: false, isWritable: true },
+    { pubkey: debtVault, isSigner: false, isWritable: true },
+    { pubkey: collPool, isSigner: false, isWritable: true },
+    { pubkey: collPosition, isSigner: false, isWritable: true },
+    { pubkey: collVault, isSigner: false, isWritable: true },
+    { pubkey: collPoolAuthority, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ...otherPairs.flatMap((pair) => [
+      { pubkey: pair.pool, isSigner: false, isWritable: false },
+      { pubkey: pair.position, isSigner: false, isWritable: false },
+    ]),
+  ];
+
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
 }

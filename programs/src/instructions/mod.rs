@@ -1,5 +1,9 @@
 mod borrow;
 mod collect_fees;
+mod cross_borrow;
+mod cross_liquidate;
+mod cross_repay;
+mod cross_withdraw;
 mod deposit;
 mod enable_privacy;
 mod flash_borrow;
@@ -11,6 +15,8 @@ mod initialize;
 mod liquidate;
 #[cfg(feature = "testing")]
 mod mock_fees;
+#[cfg(feature = "testing")]
+mod mock_oracle;
 mod pause_pool;
 mod private_borrow;
 mod private_deposit;
@@ -18,12 +24,17 @@ mod private_repay;
 mod private_withdraw;
 mod repay;
 mod resume_pool;
+mod set_pool_decimals;
 mod update_oracle_price;
 mod update_pool;
 mod withdraw;
 
 pub use borrow::Borrow;
 pub use collect_fees::CollectFees;
+pub use cross_borrow::CrossBorrow;
+pub use cross_liquidate::CrossLiquidate;
+pub use cross_repay::CrossRepay;
+pub use cross_withdraw::CrossWithdraw;
 pub use deposit::Deposit;
 pub use enable_privacy::EnablePrivacy;
 pub use flash_borrow::FlashBorrow;
@@ -35,6 +46,8 @@ pub use initialize::Initialize;
 pub use liquidate::Liquidate;
 #[cfg(feature = "testing")]
 pub use mock_fees::MockFees;
+#[cfg(feature = "testing")]
+pub use mock_oracle::MockOracle;
 pub use pause_pool::PausePool;
 pub use private_borrow::PrivateBorrow;
 pub use private_deposit::PrivateDeposit;
@@ -42,6 +55,7 @@ pub use private_repay::PrivateRepay;
 pub use private_withdraw::PrivateWithdraw;
 pub use repay::Repay;
 pub use resume_pool::ResumePool;
+pub use set_pool_decimals::SetPoolDecimals;
 pub use update_oracle_price::UpdateOraclePrice;
 pub use update_pool::UpdatePool;
 pub use withdraw::Withdraw;

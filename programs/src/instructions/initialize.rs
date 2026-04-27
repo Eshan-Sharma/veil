@@ -94,6 +94,16 @@ impl Initialize {
         }
         .invoke_signed(&[signer])?;
 
+        // ── Read token decimals from mint ────────────────────────────────
+        // SPL Token mint layout: decimals is at byte offset 44 (1 byte).
+        if token_mint.data_len() < 82 {
+            return Err(LendError::InvalidInstructionData.into());
+        }
+        let mint_data = unsafe {
+            core::slice::from_raw_parts(token_mint.data_ptr(), token_mint.data_len())
+        };
+        let token_decimals = mint_data[44];
+
         // ── Initialise pool state ─────────────────────────────────────────
         let clock = Clock::get()?;
         LendingPool::init(
@@ -106,6 +116,10 @@ impl Initialize {
             self.pool_bump,
             self.vault_bump,
         )?;
+
+        // Set token decimals after init.
+        let pool_mut = LendingPool::from_account_mut(pool)?;
+        pool_mut.token_decimals = token_decimals;
 
         Ok(())
     }

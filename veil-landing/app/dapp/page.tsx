@@ -27,7 +27,7 @@ import { getPoolType, getPoolIcon, getPoolColor, type PoolType } from "./lib/tok
 
 // ─── Types ──────────────────────���─────────────────────────────────────────────
 
-type View = "markets" | "portfolio" | "flash" | "liquidate" | "history";
+type View = "markets" | "portfolio" | "cross" | "flash" | "liquidate" | "history";
 type ModalType = "supply" | "borrow" | "withdraw" | "repay" | "ika-setup";
 
 type TxEntry = {
@@ -419,6 +419,7 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
   const tabs: { id: View; label: string; icon: string }[] = [
     { id: "markets", label: "Markets", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
     { id: "portfolio", label: "Portfolio", icon: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
+    { id: "cross", label: "Cross", icon: "M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" },
     { id: "flash", label: "Flash", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
     { id: "liquidate", label: "Liquidate", icon: "M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.75-2.96L13.76 4a2 2 0 00-3.5 0L3.3 16.04A2 2 0 005.07 19z" },
     { id: "history", label: "History", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
@@ -476,6 +477,7 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
 const MOBILE_TABS: { id: View; label: string; icon: string }[] = [
   { id: "markets", label: "Markets", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
   { id: "portfolio", label: "Portfolio", icon: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
+  { id: "cross", label: "Cross", icon: "M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" },
   { id: "flash", label: "Flash", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
   { id: "liquidate", label: "Liquidate", icon: "M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.75-2.96L13.76 4a2 2 0 00-3.5 0L3.3 16.04A2 2 0 005.07 19z" },
   { id: "history", label: "History", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
@@ -1145,6 +1147,174 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
         {/* Right: sticky position summary */}
         <PortfolioSummary positions={detailPositions} pools={pools} setModal={setModal} pythPrices={pythPrices} />
       </div>
+    </div>
+  );
+};
+
+// ─── Cross-Collateral Borrow View ───────────────────────────────────────────
+
+const CrossBorrowView = ({ connected, pools, pythPrices }: { connected: boolean; pools: PoolView[]; pythPrices: PythPrices }) => {
+  const [collIdx, setCollIdx] = useState(0);
+  const [borrowIdx, setBorrowIdx] = useState(pools.length > 1 ? 1 : 0);
+  const [amount, setAmount] = useState("");
+  const [inputMode, setInputMode] = useState<"token" | "usd">("token");
+  const { crossBorrow, status } = useVeilActions();
+
+  const collPool = pools[collIdx];
+  const borrowPool = pools[borrowIdx];
+  const collSymbol = collPool?.symbol ?? "unknown";
+  const borrowSymbol = borrowPool?.symbol ?? "unknown";
+  const collPrice = collPool ? pythPrices[collSymbol.toLowerCase()] ?? null : null;
+  const borrowPrice = borrowPool ? pythPrices[borrowSymbol.toLowerCase()] ?? null : null;
+
+  const parsed = parseFloat(amount);
+  const validInput = !isNaN(parsed) && parsed > 0;
+  const borrowDecimals = borrowPool ? Number(borrowPool.decimals) : 9;
+
+  const tokenAmount = inputMode === "token"
+    ? (validInput ? parsed : 0)
+    : (validInput && borrowPrice ? parsed / borrowPrice : 0);
+  const usdAmount = inputMode === "usd"
+    ? (validInput ? parsed : 0)
+    : (validInput && borrowPrice ? parsed * borrowPrice : 0);
+
+  const collDeposit = collPool ? Number(collPool.totalDeposits) / 10 ** Number(collPool.decimals) : 0;
+  const collUsd = collPrice ? collDeposit * collPrice : 0;
+
+  const handleBorrow = async () => {
+    if (!connected || !borrowPool || !collPool || tokenAmount <= 0) return;
+    const raw = BigInt(Math.floor(tokenAmount * 10 ** borrowDecimals));
+    await crossBorrow(borrowPool, [collPool], raw);
+    setAmount("");
+  };
+
+  const sty = {
+    card: { borderRadius: 20, border: "1px solid #e7e7ec", background: "white", padding: 24, marginBottom: 16 } as CSSProperties,
+    label: { fontSize: 12, fontWeight: 600, color: "#71717a", textTransform: "uppercase" as const, letterSpacing: "0.08em", marginBottom: 8 },
+    select: { width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid #e7e7ec", fontSize: 14, fontWeight: 500, background: "#fafafa", appearance: "none" as const, cursor: "pointer" },
+    input: { width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid #e7e7ec", fontSize: 16, fontWeight: 500, fontFamily: "var(--font-mono, monospace)" },
+    btn: { width: "100%", padding: "14px 0", borderRadius: 14, border: "none", fontSize: 15, fontWeight: 700, cursor: "pointer", color: "#fff", background: "linear-gradient(135deg,#6d28d9,#db2777)", opacity: validInput && connected ? 1 : 0.4 } as CSSProperties,
+    badge: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 600 } as CSSProperties,
+  };
+
+  return (
+    <div style={{ maxWidth: 520, margin: "0 auto", padding: "24px 0" }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", color: "#0b0b10" }}>Cross-Collateral Borrow</div>
+        <div style={{ fontSize: 14, color: "#71717a", marginTop: 4 }}>Deposit one asset, borrow another — Aave-style.</div>
+      </div>
+
+      {!connected ? (
+        <div style={{ ...sty.card, textAlign: "center", color: "#71717a", fontSize: 14 }}>
+          Connect your wallet to use cross-collateral borrowing.
+        </div>
+      ) : pools.length < 2 ? (
+        <div style={{ ...sty.card, textAlign: "center", color: "#71717a", fontSize: 14 }}>
+          Need at least 2 pools for cross-collateral borrowing.
+        </div>
+      ) : (
+        <>
+          {/* Collateral pool */}
+          <div style={sty.card}>
+            <div style={sty.label}>Collateral pool</div>
+            <select value={collIdx} onChange={(e) => setCollIdx(Number(e.target.value))} style={sty.select}>
+              {pools.map((p, i) => (
+                <option key={p.poolAddress.toBase58()} value={i}>
+                  {getPoolIcon(p.symbol)} {p.symbol} — {shortAddr(p.poolAddress.toBase58())}
+                </option>
+              ))}
+            </select>
+            {collPool && (
+              <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ ...sty.badge, background: "#ecfdf5", color: "#065f46" }}>
+                  Deposits: {formatTokenAmount(collPool.totalDeposits, collPool.decimals, collSymbol)}
+                </span>
+                {collPrice && (
+                  <span style={{ ...sty.badge, background: "#ede9fe", color: "#4c1d95" }}>
+                    ≈ {formatUsd(collUsd)}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Arrow */}
+          <div style={{ textAlign: "center", margin: "-8px 0", position: "relative", zIndex: 1 }}>
+            <span style={{ display: "inline-grid", placeItems: "center", width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg,#6d28d9,#db2777)", color: "white" }}>
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M10 3v14M5 12l5 5 5-5" /></svg>
+            </span>
+          </div>
+
+          {/* Borrow pool */}
+          <div style={sty.card}>
+            <div style={sty.label}>Borrow pool</div>
+            <select value={borrowIdx} onChange={(e) => setBorrowIdx(Number(e.target.value))} style={sty.select}>
+              {pools.map((p, i) => (
+                <option key={p.poolAddress.toBase58()} value={i} disabled={i === collIdx}>
+                  {getPoolIcon(p.symbol)} {p.symbol} — {shortAddr(p.poolAddress.toBase58())}
+                </option>
+              ))}
+            </select>
+
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#71717a" }}>
+                  {inputMode === "token" ? "Amount" : "USD Amount"}
+                </span>
+                <button
+                  onClick={() => setInputMode((m) => (m === "token" ? "usd" : "token"))}
+                  style={{ fontSize: 11, fontWeight: 600, color: "#6d28d9", background: "#ede9fe", border: "none", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}
+                >
+                  ⇄ {inputMode === "token" ? "USD" : borrowSymbol}
+                </button>
+              </div>
+              <input
+                type="number"
+                placeholder={inputMode === "token" ? `0.00 ${borrowSymbol}` : "$0.00"}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                style={sty.input}
+              />
+              {validInput && borrowPrice && (
+                <div style={{ fontSize: 12, color: "#71717a", marginTop: 4, fontFamily: "var(--font-mono, monospace)" }}>
+                  {inputMode === "token"
+                    ? `≈ ${formatUsd(usdAmount)}`
+                    : `≈ ${tokenAmount.toFixed(borrowDecimals > 6 ? 6 : borrowDecimals)} ${borrowSymbol}`}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Summary */}
+          {validInput && collPrice && borrowPrice && (
+            <div style={{ ...sty.card, background: "#fafafa" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46", marginBottom: 6 }}>
+                <span>Collateral value</span>
+                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600 }}>{formatUsd(collUsd)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46", marginBottom: 6 }}>
+                <span>Borrow value</span>
+                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600 }}>{formatUsd(usdAmount)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46" }}>
+                <span>Est. global HF</span>
+                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600, color: (collUsd * 0.8) / usdAmount >= 1 ? "#059669" : "#dc2626" }}>
+                  {((collUsd * 0.8) / usdAmount).toFixed(2)}×
+                </span>
+              </div>
+            </div>
+          )}
+
+          <button onClick={handleBorrow} disabled={!validInput || !connected || status === "signing" || status === "confirming" || collIdx === borrowIdx} style={sty.btn}>
+            {status === "signing" ? "Signing…" : status === "confirming" ? "Confirming…" : "Cross Borrow"}
+          </button>
+          {collIdx === borrowIdx && (
+            <div style={{ textAlign: "center", fontSize: 12, color: "#dc2626", marginTop: 6 }}>
+              Collateral and borrow pools must be different.
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
@@ -2000,6 +2170,7 @@ export default function DAppPage() {
       <main className="dapp-main">
         {view === "markets" && <MarketsView fhe={fhe} setModal={setModal} pools={pools} poolsLoading={poolsLoading} poolsError={poolsError} refreshPools={refreshPools} />}
         {view === "portfolio" && <PortfolioView fhe={fhe} connected={connected} setModal={setModal} pools={pools} refreshKey={portfolioRefreshKey} />}
+        {view === "cross" && <CrossBorrowView connected={connected} pools={pools} pythPrices={pythPrices} />}
         {view === "flash" && <FlashView connected={connected} fhe={fhe} pools={pools} pythPrices={pythPrices} />}
         {view === "liquidate" && <LiquidateView connected={connected} pools={pools} pythPrices={pythPrices} />}
         {view === "history" && <HistoryView connected={connected} pools={pools} />}
