@@ -23,26 +23,33 @@ export async function POST(req: Request) {
   if (!info) return NextResponse.json({ error: "pool account not found" }, { status: 404 });
 
   const p = decodeLendingPool(Buffer.from(info.data));
+  const pythFeed = p.pythPriceFeed.toBase58();
+  const hasOracle = pythFeed !== "11111111111111111111111111111111";
   await sql`
     INSERT INTO pools (
       pool_address, token_mint, symbol, authority, vault,
       pool_bump, authority_bump, vault_bump, paused,
       total_deposits, total_borrows, accumulated_fees,
+      supply_index, borrow_index,
       ltv_wad, liquidation_threshold_wad, liquidation_bonus_wad, protocol_liq_fee_wad,
       reserve_factor_wad, close_factor_wad,
       base_rate_wad, optimal_util_wad, slope1_wad, slope2_wad,
       flash_fee_bps,
+      oracle_price, oracle_conf, oracle_expo, pyth_price_feed,
       last_synced_at
     ) VALUES (
       ${poolAddr}, ${p.tokenMint.toBase58()}, ${body.symbol ?? null},
       ${p.authority.toBase58()}, ${p.vault.toBase58()},
       ${p.poolBump}, ${p.authorityBump}, ${p.vaultBump},
-      ${false},
+      ${p.paused},
       ${p.totalDeposits.toString()}, ${p.totalBorrows.toString()}, ${p.accumulatedFees.toString()},
+      ${p.supplyIndex.toString()}, ${p.borrowIndex.toString()},
       ${p.ltv.toString()}, ${p.liquidationThreshold.toString()}, ${p.liquidationBonus.toString()}, ${p.protocolLiqFee.toString()},
       ${p.reserveFactor.toString()}, ${p.closeFactor.toString()},
       ${p.baseRate.toString()}, ${p.optimalUtilization.toString()}, ${p.slope1.toString()}, ${p.slope2.toString()},
       ${Number(p.flashFeeBps)},
+      ${p.oraclePrice.toString()}, ${p.oracleConf.toString()}, ${p.oracleExpo},
+      ${hasOracle ? pythFeed : null},
       now()
     )
     ON CONFLICT (pool_address) DO UPDATE SET
@@ -52,9 +59,12 @@ export async function POST(req: Request) {
       pool_bump = EXCLUDED.pool_bump,
       authority_bump = EXCLUDED.authority_bump,
       vault_bump = EXCLUDED.vault_bump,
+      paused = EXCLUDED.paused,
       total_deposits = EXCLUDED.total_deposits,
       total_borrows = EXCLUDED.total_borrows,
       accumulated_fees = EXCLUDED.accumulated_fees,
+      supply_index = EXCLUDED.supply_index,
+      borrow_index = EXCLUDED.borrow_index,
       ltv_wad = EXCLUDED.ltv_wad,
       liquidation_threshold_wad = EXCLUDED.liquidation_threshold_wad,
       liquidation_bonus_wad = EXCLUDED.liquidation_bonus_wad,
@@ -66,6 +76,10 @@ export async function POST(req: Request) {
       slope1_wad = EXCLUDED.slope1_wad,
       slope2_wad = EXCLUDED.slope2_wad,
       flash_fee_bps = EXCLUDED.flash_fee_bps,
+      oracle_price = EXCLUDED.oracle_price,
+      oracle_conf = EXCLUDED.oracle_conf,
+      oracle_expo = EXCLUDED.oracle_expo,
+      pyth_price_feed = EXCLUDED.pyth_price_feed,
       last_synced_at = now()
   `;
   return NextResponse.json({ ok: true, pool_address: poolAddr });

@@ -30,6 +30,8 @@ export type PoolRow = {
   paused: boolean;
   total_deposits: string;
   total_borrows: string;
+  supply_index: string;
+  borrow_index: string;
   accumulated_fees: string;
   ltv_wad: string | null;
   liquidation_threshold_wad: string | null;
@@ -42,6 +44,7 @@ export type PoolRow = {
   slope1_wad: string | null;
   slope2_wad: string | null;
   flash_fee_bps: number | null;
+  decimals: number;
   oracle_price: string | null;
   oracle_conf: string | null;
   oracle_expo: number | null;

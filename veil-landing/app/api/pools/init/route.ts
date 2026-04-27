@@ -17,6 +17,7 @@ export async function POST(req: Request) {
     pool_address?: string; token_mint?: string; symbol?: string;
     authority?: string; vault?: string;
     pool_bump?: number; authority_bump?: number; vault_bump?: number;
+    decimals?: number;
     init_signature?: string;
   };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
     pool_address, token_mint, symbol,
     authority, vault,
     pool_bump, authority_bump, vault_bump,
+    decimals,
     init_signature,
   } = body;
 
@@ -43,11 +45,11 @@ export async function POST(req: Request) {
   await sql`
     INSERT INTO pools (
       pool_address, token_mint, symbol, authority, vault,
-      pool_bump, authority_bump, vault_bump,
+      pool_bump, authority_bump, vault_bump, decimals,
       created_by, init_signature
     ) VALUES (
       ${pool_address}, ${token_mint}, ${symbol ?? null}, ${authority}, ${vault},
-      ${pool_bump ?? 0}, ${authority_bump ?? 0}, ${vault_bump ?? 0},
+      ${pool_bump ?? 0}, ${authority_bump ?? 0}, ${vault_bump ?? 0}, ${decimals ?? 9},
       ${actor}, ${init_signature ?? null}
     )
     ON CONFLICT (pool_address) DO NOTHING
