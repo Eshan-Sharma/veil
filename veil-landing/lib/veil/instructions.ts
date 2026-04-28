@@ -548,6 +548,36 @@ export function setPoolDecimalsIx(
   });
 }
 
+// ─── InitPosition (discriminator 0x1A) ──────────────────────────────────────
+//
+// Creates an empty UserPosition PDA without depositing.
+// Needed before cross-borrow when the user has no position in the borrow pool.
+// Idempotent — no-op if position already exists.
+//
+// Accounts:
+//   [0]  user           signer, writable (pays rent)
+//   [1]  pool           read-only
+//   [2]  position       writable  — UserPosition PDA
+//   [3]  system_program
+
+export function initPositionIx(
+  user: PublicKey,
+  pool: PublicKey,
+  position: PublicKey,
+  positionBump: number,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user, isSigner: true, isWritable: true },
+      { pubkey: pool, isSigner: false, isWritable: false },
+      { pubkey: position, isSigner: false, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([0x1A, positionBump]),
+  });
+}
+
 // ─── CrossBorrow (discriminator 0x16) ────────────────────────────────────────
 //
 // Accounts:

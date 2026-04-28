@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import {
   depositIx,
@@ -17,9 +17,11 @@ import {
   crossWithdrawIx,
   crossRepayIx,
   crossLiquidateIx,
+  initPositionIx,
   findPoolAuthorityAddress,
   findPositionAddress,
   TOKEN_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID,
 } from "@/lib/veil";
 import type { CollateralPair } from "@/lib/veil/instructions";
 import type { PoolView } from "@/lib/veil/usePools";
@@ -59,7 +61,7 @@ export const useVeilActions = () => {
   const reset = () => { setStatus("idle"); setTxSig(null); setErrorMsg(null); };
 
   async function sendTx(
-    buildIx: () => TransactionInstruction,
+    buildIx: () => TransactionInstruction | TransactionInstruction[],
     meta: { action: string; poolAddress: string; amount?: bigint },
   ) {
     if (!publicKey) return;
@@ -67,8 +69,10 @@ export const useVeilActions = () => {
     setErrorMsg(null);
     setTxSig(null);
     try {
-      const ix = buildIx();
-      const tx = new Transaction().add(ix);
+      const ixResult = buildIx();
+      const ixList = Array.isArray(ixResult) ? ixResult : [ixResult];
+      const tx = new Transaction();
+      for (const ix of ixList) tx.add(ix);
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
@@ -225,7 +229,7 @@ export const useVeilActions = () => {
     async (borrowPool: PoolView, collateralPools: PoolView[], amount: bigint) => {
       if (!publicKey) return;
       const [borrowAuth] = findPoolAuthorityAddress(borrowPool.poolAddress);
-      const [borrowPos] = findPositionAddress(borrowPool.poolAddress, publicKey);
+      const [borrowPos, borrowPosBump] = findPositionAddress(borrowPool.poolAddress, publicKey);
       const userBorrowToken = getAssociatedTokenAddressSync(borrowPool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
 
       const collPairs: CollateralPair[] = collateralPools.map((cp) => {
@@ -233,8 +237,35 @@ export const useVeilActions = () => {
         return { pool: cp.poolAddress, position: pos };
       });
 
+      // Check if borrow position exists on-chain; if not, prepend initPosition to create it
+      const posInfo = await connection.getAccountInfo(borrowPos);
+      const needsInit = !posInfo || posInfo.owner.equals(SYSTEM_PROGRAM_ID);
+
+      // Check if user has an ATA for the borrow token; if not, create it
+      const ataInfo = await connection.getAccountInfo(userBorrowToken);
+      const needsAta = !ataInfo;
+
       await sendTx(
-        () => crossBorrowIx(publicKey, borrowPool.poolAddress, borrowPos, borrowPool.vault, userBorrowToken, borrowAuth, collPairs, amount),
+        () => {
+          const ixs: TransactionInstruction[] = [];
+
+          if (needsAta) {
+            ixs.push(
+              createAssociatedTokenAccountInstruction(publicKey, userBorrowToken, publicKey, borrowPool.tokenMint),
+            );
+          }
+
+          if (needsInit) {
+            ixs.push(
+              initPositionIx(publicKey, borrowPool.poolAddress, borrowPos, borrowPosBump),
+            );
+          }
+
+          ixs.push(
+            crossBorrowIx(publicKey, borrowPool.poolAddress, borrowPos, borrowPool.vault, userBorrowToken, borrowAuth, collPairs, amount),
+          );
+          return ixs;
+        },
         { action: "cross_borrow", poolAddress: borrowPool.poolAddress.toBase58(), amount },
       );
     },
