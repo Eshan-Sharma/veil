@@ -15,7 +15,8 @@ export type LendingPool = {
   poolBump: number;           // [137]
   vaultBump: number;          // [138]
   paused: boolean;            // [139]
-  // _pad [140..144]
+  tokenDecimals: number;      // [140]
+  // _pad [141..144]
   borrowIndex: bigint;        // [144..160] u128
   supplyIndex: bigint;        // [160..176] u128
   baseRate: bigint;           // [176..192] u128
@@ -93,6 +94,7 @@ export function decodeLendingPool(data: Buffer | Uint8Array): LendingPool {
     poolBump: data[137],
     vaultBump: data[138],
     paused: data[139] !== 0,
+    tokenDecimals: data[140],
     borrowIndex: readU128LE(data, 144),
     supplyIndex: readU128LE(data, 160),
     baseRate: readU128LE(data, 176),
@@ -166,7 +168,7 @@ export function borrowDebt(
   return (principal * currentBorrowIndex) / snapshotIndex;
 }
 
-/** Health factor as a WAD-scaled u128. Returns WAD if no debt. */
+/** Single-pool health factor (WAD-scaled). Returns WAD if no debt. */
 export function healthFactor(
   depositShares: bigint,
   supplyIndex: bigint,
@@ -180,4 +182,67 @@ export function healthFactor(
   if (debt === 0n) return WAD;
   // hf = collateral * liqThreshold / debt (WAD-scaled)
   return (collateral * liquidationThreshold) / debt;
+}
+
+// ── Cross-collateral (Aave-style) health factor ────────────────────────────
+
+/**
+ * Convert a token amount to WAD-scaled USD.
+ * Mirrors on-chain `token_to_usd_wad`:
+ *   result = amount × |oraclePrice| × 10^(18 + oracleExpo - tokenDecimals)
+ */
+export function tokenToUsdWad(
+  amount: bigint,
+  oraclePrice: bigint,
+  oracleExpo: number,
+  tokenDecimals: number,
+): bigint {
+  if (amount === 0n || oraclePrice <= 0n) return 0n;
+  const price = oraclePrice < 0n ? -oraclePrice : oraclePrice;
+  const base = amount * price;
+  const scaleExp = 18 + oracleExpo - tokenDecimals;
+  if (scaleExp >= 0) {
+    return base * 10n ** BigInt(scaleExp);
+  }
+  return base / 10n ** BigInt(-scaleExp);
+}
+
+/** Inputs for one pool+position pair in the cross-HF computation. */
+export type CrossHFInput = {
+  depositShares: bigint;
+  borrowPrincipal: bigint;
+  supplyIndex: bigint;
+  borrowIndex: bigint;
+  borrowIndexSnapshot: bigint;
+  liquidationThreshold: bigint;
+  oraclePrice: bigint;
+  oracleExpo: number;
+  tokenDecimals: number;
+};
+
+/**
+ * Account-level health factor across all positions (Aave-style).
+ *   HF = Σ(deposit_usd_i × liq_threshold_i) / Σ(debt_usd_j)
+ * Returns WAD-scaled bigint, or WAD if no debt.
+ */
+export function accountHealthFactor(positions: CrossHFInput[]): bigint {
+  let weightedCollateralUsd = 0n;
+  let totalDebtUsd = 0n;
+
+  for (const p of positions) {
+    const depositTokens = sharesToTokens(p.depositShares, p.supplyIndex);
+    const debtTokens = borrowDebt(p.borrowPrincipal, p.borrowIndex, p.borrowIndexSnapshot);
+
+    const depositUsd = tokenToUsdWad(depositTokens, p.oraclePrice, p.oracleExpo, p.tokenDecimals);
+    const debtUsd = tokenToUsdWad(debtTokens, p.oraclePrice, p.oracleExpo, p.tokenDecimals);
+
+    // WAD-scale: depositUsd is already WAD-scaled, liq_threshold is WAD-scaled
+    // wad_mul(a,b) = a * b / WAD
+    weightedCollateralUsd += (depositUsd * p.liquidationThreshold) / WAD;
+    totalDebtUsd += debtUsd;
+  }
+
+  if (totalDebtUsd === 0n) return WAD;
+  // wad_div(a,b) = a * WAD / b
+  return (weightedCollateralUsd * WAD) / totalDebtUsd;
 }
