@@ -25,12 +25,15 @@ use pinocchio::{
 };
 use pinocchio_token::instructions::Transfer;
 
-use crate::{errors::LendError, state::LendingPool};
+use crate::{
+    errors::LendError,
+    state::{check_program_owner, check_token_program, check_vault, LendingPool},
+};
 
 pub struct CollectFees;
 
 #[inline(always)]
-fn snapshot_fee_collection(pool: &LendingPool, authority: &Address) -> Result<(u64, u8), ProgramError> {
+pub(crate) fn snapshot_fee_collection(pool: &LendingPool, authority: &Address) -> Result<(u64, u8), ProgramError> {
     if pool.authority != *authority {
         return Err(LendError::Unauthorized.into());
     }
@@ -41,7 +44,7 @@ fn snapshot_fee_collection(pool: &LendingPool, authority: &Address) -> Result<(u
 }
 
 #[inline(always)]
-fn clear_accumulated_fees(pool: &mut LendingPool) {
+pub(crate) fn clear_accumulated_fees(pool: &mut LendingPool) {
     pool.accumulated_fees = 0;
 }
 
@@ -52,7 +55,7 @@ impl CollectFees {
         Ok(Self)
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 6 {
             return Err(LendError::InvalidInstructionData.into());
         }
@@ -60,9 +63,14 @@ impl CollectFees {
             return Err(LendError::MissingSignature.into());
         }
 
+        // ── Owner / identity checks ──────────────────────────────────────
+        check_program_owner(&accounts[1], program_id)?;
+        check_token_program(&accounts[5])?;
+
         // ── Authority check and fee snapshot ─────────────────────────────
         let (fee_amount, authority_bump) = {
             let pool = LendingPool::from_account(&accounts[1])?;
+            check_vault(&accounts[2], pool)?;
             snapshot_fee_collection(pool, accounts[0].address())?
         };
 
@@ -89,48 +97,3 @@ impl CollectFees {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pool() -> LendingPool {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        pool.discriminator = LendingPool::DISCRIMINATOR;
-        pool.authority = Address::new_from_array([1u8; 32]);
-        pool.authority_bump = 9;
-        pool
-    }
-
-    #[test]
-    fn collect_fees_snapshot_rejects_wrong_authority() {
-        let pool = pool();
-        assert_eq!(
-            snapshot_fee_collection(&pool, &Address::new_from_array([2u8; 32])),
-            Err(LendError::Unauthorized.into())
-        );
-    }
-
-    #[test]
-    fn collect_fees_snapshot_rejects_zero_fees() {
-        let pool = pool();
-        assert_eq!(
-            snapshot_fee_collection(&pool, &Address::new_from_array([1u8; 32])),
-            Err(LendError::NoFeesToCollect.into())
-        );
-    }
-
-    #[test]
-    fn collect_fees_snapshot_returns_amount_and_bump() {
-        let mut pool = pool();
-        pool.accumulated_fees = 123;
-        assert_eq!(snapshot_fee_collection(&pool, &Address::new_from_array([1u8; 32])), Ok((123, 9)));
-    }
-
-    #[test]
-    fn collect_fees_clear_zeroes_accumulated_fees() {
-        let mut pool = pool();
-        pool.accumulated_fees = 123;
-        clear_accumulated_fees(&mut pool);
-        assert_eq!(pool.accumulated_fees, 0);
-    }
-}

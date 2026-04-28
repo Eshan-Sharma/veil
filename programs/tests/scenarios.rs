@@ -18,7 +18,7 @@ use veil_lending::{
         BASE_RATE, CLOSE_FACTOR, FLASH_FEE_BPS, LIQ_BONUS, LIQ_THRESHOLD, LTV,
         OPTIMAL_UTIL, PROTOCOL_LIQ_FEE, RESERVE_FACTOR, SLOPE1, SLOPE2, WAD,
     },
-    state::LendingPool,
+    state::{LendingPool, SPL_TOKEN_PROGRAM_ID},
 };
 use common::{make_pool, pool_bytes, RawAccount};
 
@@ -447,23 +447,26 @@ fn flash_fee_split_rounds_toward_lp() {
 }
 
 #[test]
-fn flash_fee_rounding_small_amounts_matches_expected_splits() {
-    let cases = [
-        (1u64, 0u64, 0u64),
-        (2u64, 0u64, 0u64),
-        (9u64, 0u64, 0u64),
-        (10u64, 0u64, 0u64),
-        (11u64, 0u64, 0u64),
-        (1_112u64, 1u64, 0u64),
-    ];
-
-    for (amount, expected_fee, expected_protocol) in cases {
-        let fee = flash_fee(amount, FLASH_FEE_BPS).unwrap();
-        let (lp, protocol) = split_flash_fee(fee);
-        assert_eq!(fee, expected_fee, "unexpected fee for amount {}", amount);
-        assert_eq!(protocol, expected_protocol, "unexpected protocol fee for amount {}", amount);
-        assert_eq!(lp + protocol, fee);
+fn flash_fee_rejects_dust_loans_under_min() {
+    // Below MIN_FLASH_AMOUNT (10_000) the flat fee rounds to zero at 9 bps,
+    // which would let an attacker iterate sub-dust loans for free. Loans this
+    // small must fail outright.
+    for amount in [1u64, 2, 9, 10, 11, 1_112, 9_999] {
+        assert!(
+            flash_fee(amount, FLASH_FEE_BPS).is_err(),
+            "expected error for sub-dust amount {}",
+            amount
+        );
     }
+}
+
+#[test]
+fn flash_fee_rounds_up_to_one_for_min_amount() {
+    // At exactly the minimum, fee = 10_000 × 9 / 10_000 = 9, well above 1.
+    let fee = flash_fee(10_000, FLASH_FEE_BPS).unwrap();
+    let (lp, protocol) = split_flash_fee(fee);
+    assert_eq!(fee, 9);
+    assert_eq!(lp + protocol, fee);
 }
 
 #[test]
@@ -944,7 +947,7 @@ fn default_update_data() -> Vec<u8> {
 fn update_pool_wrong_authority_returns_unauthorized() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(OTHER, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -957,7 +960,7 @@ fn update_pool_wrong_authority_returns_unauthorized() {
 fn update_pool_non_signer_returns_missing_signature() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, false, false, &[]); // not a signer
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -970,7 +973,7 @@ fn update_pool_non_signer_returns_missing_signature() {
 fn update_pool_correct_authority_succeeds() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -983,7 +986,7 @@ fn update_pool_correct_authority_succeeds() {
 fn update_pool_writes_params_to_pool() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let new_flash_bps: u64 = 50;
     let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
                              LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, new_flash_bps);
@@ -1000,35 +1003,35 @@ fn update_pool_writes_params_to_pool() {
 fn update_pool_rejects_ltv_ge_liq_threshold() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
                              LIQ_THRESHOLD, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 9);
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
         UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
-    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+    assert_eq!(result, Err(LendError::ParameterOutOfBounds.into()));
 }
 
 #[test]
 fn update_pool_rejects_flash_fee_over_10000() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let d = update_pool_data(BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
                              LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 10_001);
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
         UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
-    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+    assert_eq!(result, Err(LendError::ParameterOutOfBounds.into()));
 }
 
 #[test]
 fn update_pool_rejects_liquidation_threshold_ge_wad() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let d = update_pool_data(
         BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
         LTV, WAD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 9,
@@ -1037,14 +1040,14 @@ fn update_pool_rejects_liquidation_threshold_ge_wad() {
         let mut accounts = [auth.view(), pool_acct.view()];
         UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
-    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+    assert_eq!(result, Err(LendError::ParameterOutOfBounds.into()));
 }
 
 #[test]
 fn update_pool_rejects_reserve_factor_ge_wad() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let d = update_pool_data(
         BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, WAD,
         LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, CLOSE_FACTOR, 9,
@@ -1053,14 +1056,14 @@ fn update_pool_rejects_reserve_factor_ge_wad() {
         let mut accounts = [auth.view(), pool_acct.view()];
         UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
-    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+    assert_eq!(result, Err(LendError::ParameterOutOfBounds.into()));
 }
 
 #[test]
 fn update_pool_rejects_close_factor_above_wad() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
     let d = update_pool_data(
         BASE_RATE, OPTIMAL_UTIL, SLOPE1, SLOPE2, RESERVE_FACTOR,
         LTV, LIQ_THRESHOLD, LIQ_BONUS, PROTOCOL_LIQ_FEE, WAD + 1, 9,
@@ -1069,7 +1072,7 @@ fn update_pool_rejects_close_factor_above_wad() {
         let mut accounts = [auth.view(), pool_acct.view()];
         UpdatePool::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
-    assert_eq!(result, Err(LendError::InvalidInstructionData.into()));
+    assert_eq!(result, Err(LendError::ParameterOutOfBounds.into()));
 }
 
 #[test]
@@ -1094,7 +1097,7 @@ fn stricter_pool_params_after_users_exist_do_not_corrupt_accounting() {
 fn pause_pool_wrong_authority_returns_unauthorized() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(OTHER, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1107,7 +1110,7 @@ fn pause_pool_wrong_authority_returns_unauthorized() {
 fn pause_pool_non_signer_returns_missing_signature() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, false, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1120,7 +1123,7 @@ fn pause_pool_non_signer_returns_missing_signature() {
 fn pause_pool_correct_authority_sets_paused() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1136,7 +1139,7 @@ fn pause_pool_correct_authority_sets_paused() {
 fn resume_pool_wrong_authority_returns_unauthorized() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(OTHER, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1149,7 +1152,7 @@ fn resume_pool_wrong_authority_returns_unauthorized() {
 fn resume_pool_non_signer_returns_missing_signature() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, false, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     let result = unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1163,7 +1166,7 @@ fn resume_pool_clears_paused_flag() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.paused = 1;
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1177,7 +1180,7 @@ fn resume_pool_clears_paused_flag() {
 fn pause_resume_round_trip() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1196,7 +1199,7 @@ fn pause_resume_round_trip() {
 fn repeated_pause_is_idempotent() {
     let pool = make_pool(AUTHORITY, 0);
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1213,7 +1216,7 @@ fn repeated_resume_is_idempotent() {
     let mut pool = make_pool(AUTHORITY, 0);
     pool.paused = 1;
     let mut auth = RawAccount::new(AUTHORITY, true, false, &[]);
-    let mut pool_acct = RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool));
+    let mut pool_acct = RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool));
 
     unsafe {
         let mut accounts = [auth.view(), pool_acct.view()];
@@ -1331,14 +1334,15 @@ fn dust_rounding_near_share_boundaries_stays_consistent() {
 // We test every check that fires before the CPI: signature, authority, zero fees.
 
 fn collect_accounts(signer_key: [u8; 32], is_signer: bool, fees: u64) -> [RawAccount; 6] {
-    let pool = make_pool(AUTHORITY, fees);
+    let mut pool = make_pool(AUTHORITY, fees);
+    pool.vault = pinocchio::Address::new_from_array([0x52u8; 32]);
     [
         RawAccount::new(signer_key, is_signer, false, &[]),          // [0] authority
-        RawAccount::new([0u8; 32], false, true, &pool_bytes(&pool)), // [1] pool
-        RawAccount::new([0u8; 32], false, true, &[]),                // [2] vault
+        RawAccount::new_with_owner([0u8; 32], *PROGRAM.as_array(), false, true, &pool_bytes(&pool)), // [1] pool
+        RawAccount::new([0x52u8; 32], false, true, &[]),             // [2] vault
         RawAccount::new([0u8; 32], false, true, &[]),                // [3] treasury
         RawAccount::new([0u8; 32], false, false, &[]),               // [4] pool_authority
-        RawAccount::new([0u8; 32], false, false, &[]),               // [5] token_program
+        RawAccount::new(*SPL_TOKEN_PROGRAM_ID.as_array(), false, false, &[]), // [5] token_program
     ]
 }
 

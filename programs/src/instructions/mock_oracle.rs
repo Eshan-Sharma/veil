@@ -17,6 +17,29 @@ use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResul
 use crate::errors::LendError;
 use crate::state::LendingPool;
 
+/// Hardcoded admin pubkey allowed to invoke testing-only Mock* handlers.
+///
+/// Even when built with `--features testing`, only this exact signer can
+/// rewrite oracle/fee state. The default (all zeros) is deliberately
+/// unreachable — any real signer's address differs from the system program.
+/// Set it to your dev wallet's pubkey-bytes before running localnet tests.
+///
+/// This second wall is what the audit calls for: a CI mistake that ships a
+/// `--features testing` build to mainnet does not, by itself, hand the pool
+/// over to anyone with a signed transaction.
+pub(crate) const MOCK_ADMIN: Address = Address::new_from_array([0u8; 32]);
+
+#[inline(always)]
+pub(crate) fn enforce_mock_admin(account: &AccountView) -> Result<(), ProgramError> {
+    if !account.is_signer() {
+        return Err(LendError::MissingSignature.into());
+    }
+    if account.address() != &MOCK_ADMIN {
+        return Err(LendError::NotMockAdmin.into());
+    }
+    Ok(())
+}
+
 pub struct MockOracle {
     pub price: i64,
     pub expo: i32,
@@ -38,9 +61,7 @@ impl MockOracle {
         if accounts.len() < 2 {
             return Err(LendError::InvalidInstructionData.into());
         }
-        if !accounts[0].is_signer() {
-            return Err(LendError::MissingSignature.into());
-        }
+        enforce_mock_admin(&accounts[0])?;
         let pool = LendingPool::from_account_mut(&accounts[1])?;
         // Set a non-zero feed address so cross-borrow doesn't reject OracleNotAnchored
         if pool.pyth_price_feed == [0u8; 32].into() {

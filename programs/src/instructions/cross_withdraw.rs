@@ -29,7 +29,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct CrossWithdraw {
@@ -39,7 +39,7 @@ pub struct CrossWithdraw {
 /// Compute global HF after withdrawal.
 /// Returns (token_amount, authority_bump).
 #[inline(always)]
-fn validate_cross_withdraw(
+pub(crate) fn validate_cross_withdraw(
     pool: &LendingPool,
     pos: &UserPosition,
     shares: u64,
@@ -63,7 +63,7 @@ fn validate_cross_withdraw(
 
 /// Read a pool's oracle and compute WAD-scaled USD value.
 #[inline(always)]
-fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
+pub(crate) fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
     if pool.pyth_price_feed == [0u8; 32].into() {
         return Err(LendError::OracleNotAnchored.into());
     }
@@ -93,9 +93,14 @@ impl CrossWithdraw {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
+        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[1], program_id)?; // withdraw_pool
         check_program_owner(&accounts[2], program_id)?; // withdraw_position
+        check_token_program(&accounts[6])?;
+        {
+            let pool = LendingPool::from_account(&accounts[1])?;
+            check_vault(&accounts[3], pool)?;
+        }
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
@@ -144,13 +149,47 @@ impl CrossWithdraw {
             }
         }
 
-        // Include all related positions
+        // ── Cross-collateral registry checks ─────────────────────────────
+        // If the head position is cross-linked, ALL of the user's other
+        // cross-linked positions must be supplied — and they must share its
+        // cross_set_id. Without this an attacker can omit a debt-heavy pool
+        // to manufacture a passing HF.
         let related_accounts = &accounts[7..];
         if related_accounts.len() % 2 != 0 {
             return Err(LendError::InvalidInstructionData.into());
         }
-
         let num_pairs = related_accounts.len() / 2;
+
+        let (head_set_id, head_count, head_cross) = {
+            let pos = UserPosition::from_account(&accounts[2])?;
+            (pos.cross_set_id, pos.cross_count, pos.cross_collateral)
+        };
+
+        if head_cross != 0 {
+            // Head + trailing pairs must equal the recorded cross_count.
+            let supplied: u8 = (num_pairs + 1)
+                .try_into()
+                .map_err(|_| ProgramError::InvalidArgument)?;
+            if supplied != head_count {
+                return Err(LendError::CrossPositionCountMismatch.into());
+            }
+        }
+
+        // Reject duplicate pool addresses across the supplied (pool, position)
+        // pairs (and against the head pool).
+        for i in 0..num_pairs {
+            let pool_i = *accounts[7 + i * 2].address();
+            if pool_i == *accounts[1].address() {
+                return Err(LendError::DuplicateCrossPosition.into());
+            }
+            for j in (i + 1)..num_pairs {
+                let pool_j = *accounts[7 + j * 2].address();
+                if pool_i == pool_j {
+                    return Err(LendError::DuplicateCrossPosition.into());
+                }
+            }
+        }
+
         for i in 0..num_pairs {
             let pool_idx = 7 + i * 2;
             let pos_idx = 7 + i * 2 + 1;
@@ -162,6 +201,11 @@ impl CrossWithdraw {
             let rel_pos = UserPosition::from_account(&accounts[pos_idx])?;
             let rel_pool_addr = *accounts[pool_idx].address();
             rel_pos.verify_binding(&user_addr, &rel_pool_addr)?;
+
+            // Every trailing position must belong to the same cross-set.
+            if head_cross != 0 && rel_pos.cross_set_id != head_set_id {
+                return Err(LendError::CrossPositionCountMismatch.into());
+            }
 
             if rel_pos.deposit_shares > 0 {
                 let deposit = math::current_deposit_balance(rel_pos.deposit_shares, rel_pool.supply_index)?;
@@ -215,6 +259,8 @@ impl CrossWithdraw {
             // Clear cross_collateral flag if position is fully empty
             if pos.deposit_shares == 0 && pos.borrow_principal == 0 {
                 pos.cross_collateral = 0;
+                pos.cross_set_id = 0;
+                pos.cross_count = 0;
             }
         }
         {
@@ -226,108 +272,3 @@ impl CrossWithdraw {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::{LIQ_THRESHOLD, WAD};
-
-    fn pool(total_deposits: u64) -> LendingPool {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        pool.discriminator = LendingPool::DISCRIMINATOR;
-        pool.borrow_index = WAD;
-        pool.supply_index = WAD;
-        pool.liquidation_threshold = LIQ_THRESHOLD;
-        pool.authority_bump = 5;
-        pool.total_deposits = total_deposits;
-        pool.pyth_price_feed = [1u8; 32].into();
-        pool.oracle_price = 100_000_000;
-        pool.oracle_expo = -8;
-        pool.token_decimals = 6;
-        pool
-    }
-
-    fn position(deposit_shares: u64, borrow_principal: u64) -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.deposit_shares = deposit_shares;
-        pos.borrow_principal = borrow_principal;
-        pos.deposit_index_snapshot = WAD;
-        pos.borrow_index_snapshot = WAD;
-        pos
-    }
-
-    #[test]
-    fn cross_withdraw_rejects_excess_shares() {
-        let p = pool(10_000_000);
-        assert_eq!(
-            validate_cross_withdraw(&p, &position(100, 0), 101),
-            Err(LendError::ExceedsDepositBalance.into())
-        );
-    }
-
-    #[test]
-    fn cross_withdraw_rejects_insufficient_liquidity() {
-        let mut p = pool(500_000);
-        p.total_borrows = 100_000;
-        p.accumulated_fees = 50_000;
-        assert_eq!(
-            validate_cross_withdraw(&p, &position(1_000_000, 0), 600_000),
-            Err(LendError::InsufficientLiquidity.into())
-        );
-    }
-
-    #[test]
-    fn cross_withdraw_returns_token_amount_and_bump() {
-        let p = pool(10_000_000);
-        assert_eq!(
-            validate_cross_withdraw(&p, &position(1_000, 0), 500),
-            Ok((500, 5))
-        );
-    }
-
-    // ── Positive: withdraw all shares when no debt ──────────────────────
-
-    #[test]
-    fn cross_withdraw_all_shares_no_debt() {
-        let p = pool(10_000_000);
-        let result = validate_cross_withdraw(&p, &position(5_000, 0), 5_000);
-        assert!(result.is_ok());
-        let (amount, bump) = result.unwrap();
-        assert_eq!(amount, 5_000);
-        assert_eq!(bump, 5);
-    }
-
-    // ── Negative: withdraw exactly one more than available ──────────────
-
-    #[test]
-    fn cross_withdraw_one_over_deposit() {
-        let p = pool(10_000_000);
-        assert_eq!(
-            validate_cross_withdraw(&p, &position(1_000, 0), 1_001),
-            Err(LendError::ExceedsDepositBalance.into())
-        );
-    }
-
-    // ── Negative: pool fully utilized — no available tokens ─────────────
-
-    #[test]
-    fn cross_withdraw_zero_available() {
-        let mut p = pool(1_000);
-        p.total_borrows = 1_000; // 100% utilized
-        assert_eq!(
-            validate_cross_withdraw(&p, &position(1_000, 0), 1),
-            Err(LendError::InsufficientLiquidity.into())
-        );
-    }
-
-    // ── Positive: partial withdraw leaves enough collateral ─────────────
-
-    #[test]
-    fn cross_withdraw_partial_with_debt_ok() {
-        let p = pool(10_000);
-        // Position: 2000 deposit shares, 0 borrow in this pool
-        // (Debt is in another pool — validated in process(), not here)
-        let result = validate_cross_withdraw(&p, &position(2_000, 0), 500);
-        assert!(result.is_ok());
-    }
-}

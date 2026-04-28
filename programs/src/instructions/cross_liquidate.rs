@@ -36,7 +36,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct CrossLiquidate {
@@ -45,7 +45,7 @@ pub struct CrossLiquidate {
 
 /// Read a pool's oracle and compute WAD-scaled USD value.
 #[inline(always)]
-fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
+pub(crate) fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
     if pool.pyth_price_feed == [0u8; 32].into() {
         return Err(LendError::OracleNotAnchored.into());
     }
@@ -55,7 +55,7 @@ fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramErr
 /// Compute cross-liquidation terms.
 /// Returns (capped_repay, collateral_seized_tokens, protocol_fee_tokens, seized_shares).
 #[inline(always)]
-fn compute_cross_liquidation_terms(
+pub(crate) fn compute_cross_liquidation_terms(
     debt_pool: &LendingPool,
     debt_pos: &UserPosition,
     coll_pool: &LendingPool,
@@ -137,11 +137,20 @@ impl CrossLiquidate {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
+        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[3], program_id)?;  // debt_pool
         check_program_owner(&accounts[4], program_id)?;  // debt_position
         check_program_owner(&accounts[6], program_id)?;  // coll_pool
         check_program_owner(&accounts[7], program_id)?;  // coll_position
+        check_token_program(&accounts[10])?;
+        {
+            let debt_pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[5], debt_pool)?;
+        }
+        {
+            let coll_pool = LendingPool::from_account(&accounts[6])?;
+            check_vault(&accounts[8], coll_pool)?;
+        }
 
         // ── Accrue interest on both pools ─────────────────────────────────
         let clock = Clock::get()?;
@@ -163,6 +172,13 @@ impl CrossLiquidate {
             let debt_pos = UserPosition::from_account(&accounts[4])?;
             debt_pos.owner
         };
+
+        // Self-liquidation is forbidden: combined with vault validation gone
+        // wrong elsewhere it becomes a primitive for seizing pool collateral
+        // against attacker-controlled phantom debt.
+        if &borrower_addr == accounts[0].address() {
+            return Err(LendError::SelfLiquidation.into());
+        }
 
         // Include debt pool position
         {
@@ -212,12 +228,57 @@ impl CrossLiquidate {
             }
         }
 
-        // Include trailing position pairs
+        // ── Cross-collateral registry checks ─────────────────────────────
+        // The borrower's debt position drives the cross-set: every trailing
+        // pair must share its set_id, and the total count (debt + collateral
+        // + trailing) must equal the recorded cross_count. Otherwise an
+        // attacker omits a heavy collateral pool to fake an unhealthy HF and
+        // steal collateral.
         let trailing = &accounts[11..];
         if trailing.len() % 2 != 0 {
             return Err(LendError::InvalidInstructionData.into());
         }
-        for i in 0..(trailing.len() / 2) {
+        let num_pairs = trailing.len() / 2;
+
+        let (debt_set_id, debt_count, debt_cross) = {
+            let pos = UserPosition::from_account(&accounts[4])?;
+            (pos.cross_set_id, pos.cross_count, pos.cross_collateral)
+        };
+
+        if debt_cross != 0 {
+            let supplied: u8 = (num_pairs + 2)
+                .try_into()
+                .map_err(|_| ProgramError::InvalidArgument)?;
+            if supplied != debt_count {
+                return Err(LendError::CrossPositionCountMismatch.into());
+            }
+            // Collateral position must share the same cross-set.
+            let coll_pos_set = UserPosition::from_account(&accounts[7])?.cross_set_id;
+            if coll_pos_set != debt_set_id {
+                return Err(LendError::CrossPositionCountMismatch.into());
+            }
+        }
+
+        // Reject duplicate pool addresses across all supplied pools.
+        let head_debt_pool = *accounts[3].address();
+        let head_coll_pool = *accounts[6].address();
+        if head_debt_pool == head_coll_pool {
+            return Err(LendError::DuplicateCrossPosition.into());
+        }
+        for i in 0..num_pairs {
+            let pool_i = *accounts[11 + i * 2].address();
+            if pool_i == head_debt_pool || pool_i == head_coll_pool {
+                return Err(LendError::DuplicateCrossPosition.into());
+            }
+            for j in (i + 1)..num_pairs {
+                let pool_j = *accounts[11 + j * 2].address();
+                if pool_i == pool_j {
+                    return Err(LendError::DuplicateCrossPosition.into());
+                }
+            }
+        }
+
+        for i in 0..num_pairs {
             let p_idx = 11 + i * 2;
             let pos_idx = 11 + i * 2 + 1;
             check_program_owner(&accounts[p_idx], program_id)?;
@@ -227,6 +288,10 @@ impl CrossLiquidate {
             let pos = UserPosition::from_account(&accounts[pos_idx])?;
             let pool_addr = *accounts[p_idx].address();
             pos.verify_binding(&borrower_addr, &pool_addr)?;
+
+            if debt_cross != 0 && pos.cross_set_id != debt_set_id {
+                return Err(LendError::CrossPositionCountMismatch.into());
+            }
 
             if pos.deposit_shares > 0 {
                 let dep = math::current_deposit_balance(pos.deposit_shares, pool.supply_index)?;
@@ -300,10 +365,10 @@ impl CrossLiquidate {
         }
 
         // ── Update debt pool totals ──────────────────────────────────────
+        // Depositor claims unchanged by repay; interest already credited via accrue.
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             pool.total_borrows = pool.total_borrows.saturating_sub(repay);
-            pool.total_deposits = pool.total_deposits.saturating_add(repay);
         }
 
         // ── Update collateral position ───────────────────────────────────
@@ -325,198 +390,3 @@ impl CrossLiquidate {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::{CLOSE_FACTOR, LIQ_BONUS, LIQ_THRESHOLD, PROTOCOL_LIQ_FEE, WAD};
-
-    fn make_pool(
-        oracle_price: i64,
-        oracle_expo: i32,
-        token_decimals: u8,
-    ) -> LendingPool {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        pool.discriminator = LendingPool::DISCRIMINATOR;
-        pool.borrow_index = WAD;
-        pool.supply_index = WAD;
-        pool.ltv = crate::math::LTV;
-        pool.liquidation_threshold = LIQ_THRESHOLD;
-        pool.liquidation_bonus = LIQ_BONUS;
-        pool.protocol_liq_fee = PROTOCOL_LIQ_FEE;
-        pool.close_factor = CLOSE_FACTOR;
-        pool.authority_bump = 7;
-        pool.pyth_price_feed = [1u8; 32].into();
-        pool.oracle_price = oracle_price;
-        pool.oracle_expo = oracle_expo;
-        pool.token_decimals = token_decimals;
-        pool
-    }
-
-    fn position(deposit_shares: u64, borrow_principal: u64) -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.deposit_shares = deposit_shares;
-        pos.borrow_principal = borrow_principal;
-        pos.deposit_index_snapshot = WAD;
-        pos.borrow_index_snapshot = WAD;
-        pos
-    }
-
-    #[test]
-    fn cross_liq_rejects_no_borrow() {
-        let debt_pool = make_pool(100_000_000, -8, 6); // USDC
-        let coll_pool = make_pool(15_000_000_000, -8, 9); // SOL
-        let debt_pos = position(0, 0);
-        let coll_pos = position(1_000_000_000, 0);
-
-        assert_eq!(
-            compute_cross_liquidation_terms(
-                &debt_pool, &debt_pos, &coll_pool, &coll_pos, 100,
-                100 * WAD, 50 * WAD,
-            ),
-            Err(LendError::NoBorrow.into())
-        );
-    }
-
-    #[test]
-    fn cross_liq_rejects_healthy_position() {
-        let debt_pool = make_pool(100_000_000, -8, 6);
-        let coll_pool = make_pool(15_000_000_000, -8, 9);
-        let debt_pos = position(0, 500_000); // $0.50 debt
-        let coll_pos = position(1_000_000_000, 0);
-
-        // Global HF = $120 weighted / $0.50 debt >> 1.0
-        assert_eq!(
-            compute_cross_liquidation_terms(
-                &debt_pool, &debt_pos, &coll_pool, &coll_pos, 100,
-                120 * WAD, WAD / 2, // collateral $120, debt $0.50
-            ),
-            Err(LendError::PositionHealthy.into())
-        );
-    }
-
-    #[test]
-    fn cross_liq_computes_correct_seizure() {
-        // Scenario: borrower has 10 USDC debt, 1 SOL collateral ($150)
-        // Global HF < 1.0 (contrived: we pass weighted values directly)
-        let debt_pool = make_pool(100_000_000, -8, 6); // USDC $1
-        let coll_pool = make_pool(15_000_000_000, -8, 9); // SOL $150
-
-        let debt_pos = position(0, 10_000_000); // 10 USDC debt
-        let coll_pos = position(1_000_000_000, 0); // 1 SOL collateral
-
-        // Pass unhealthy global values
-        let global_coll = WAD * 80 / 100; // $0.80 weighted (contrived)
-        let global_debt = WAD; // $1.00
-
-        let result = compute_cross_liquidation_terms(
-            &debt_pool, &debt_pos, &coll_pool, &coll_pos, 10_000_000,
-            global_coll, global_debt,
-        );
-        assert!(result.is_ok());
-
-        let (repay, liquidator_gets, protocol_fee, seized_shares) = result.unwrap();
-
-        // close_factor = 50%, so repay = 5_000_000 (5 USDC)
-        assert_eq!(repay, 5_000_000);
-
-        // 5 USDC = $5. With 5% bonus: $5.25. At $150/SOL = 0.035 SOL = 35_000_000 lamports
-        // seized_tokens = 35_000_000
-        // protocol_fee = 10% of 35_000_000 = 3_500_000
-        // liquidator_gets = 35_000_000 - 3_500_000 = 31_500_000
-        assert_eq!(protocol_fee, 3_500_000);
-        assert_eq!(liquidator_gets, 31_500_000);
-        assert_eq!(seized_shares, 35_000_000); // shares = tokens when supply_index = WAD
-    }
-
-    // ── Negative: repay more than close_factor ──────────────────────────
-
-    #[test]
-    fn cross_liq_caps_at_close_factor() {
-        let debt_pool = make_pool(100_000_000, -8, 6);
-        let coll_pool = make_pool(15_000_000_000, -8, 9);
-        let debt_pos = position(0, 10_000_000); // 10 USDC debt
-        let coll_pos = position(1_000_000_000, 0);
-
-        let global_coll = WAD * 80 / 100;
-        let global_debt = WAD;
-
-        // Request to repay full 10_000_000 but close_factor is 50%
-        let (repay, _, _, _) = compute_cross_liquidation_terms(
-            &debt_pool, &debt_pos, &coll_pool, &coll_pos, 10_000_000,
-            global_coll, global_debt,
-        ).unwrap();
-
-        assert_eq!(repay, 5_000_000, "should be capped at 50% close factor");
-    }
-
-    // ── Negative: insufficient collateral for seizure ───────────────────
-
-    #[test]
-    fn cross_liq_rejects_insufficient_collateral() {
-        let debt_pool = make_pool(100_000_000, -8, 6); // USDC
-        let coll_pool = make_pool(15_000_000_000, -8, 9); // SOL
-
-        let debt_pos = position(0, 100_000_000); // 100 USDC debt
-        let coll_pos = position(1_000, 0); // 0.000001 SOL — way too little
-
-        let global_coll = WAD / 1000; // ~$0.001 weighted
-        let global_debt = 100 * WAD; // $100
-
-        let result = compute_cross_liquidation_terms(
-            &debt_pool, &debt_pos, &coll_pool, &coll_pos, 50_000_000,
-            global_coll, global_debt,
-        );
-        assert_eq!(result, Err(LendError::InsufficientLiquidity.into()));
-    }
-
-    // ── Positive: small liquidation with correct arithmetic ─────────────
-
-    #[test]
-    fn cross_liq_small_amounts() {
-        let debt_pool = make_pool(100_000_000, -8, 6); // USDC $1
-        let coll_pool = make_pool(100_000_000, -8, 6); // USDC $1
-
-        let debt_pos = position(0, 2_000_000); // 2 USDC debt
-        let coll_pos = position(10_000_000, 0); // 10 USDC collateral
-
-        let global_coll = WAD * 8 / 10; // $0.80 weighted (unhealthy)
-        let global_debt = WAD; // $1.00
-
-        let (repay, liquidator_gets, protocol_fee, _) = compute_cross_liquidation_terms(
-            &debt_pool, &debt_pos, &coll_pool, &coll_pos, 2_000_000,
-            global_coll, global_debt,
-        ).unwrap();
-
-        // close_factor 50% of 2 USDC = 1 USDC
-        assert_eq!(repay, 1_000_000);
-        // 1 USDC × 1.05 bonus = 1_050_000 seized
-        // protocol_fee = 10% of 1_050_000 = 105_000
-        // liquidator gets = 1_050_000 - 105_000 = 945_000
-        assert_eq!(protocol_fee, 105_000);
-        assert_eq!(liquidator_gets, 945_000);
-    }
-
-    // ── Negative: zero repay amount ─────────────────────────────────────
-
-    #[test]
-    fn cross_liq_zero_repay_caps_to_zero() {
-        let debt_pool = make_pool(100_000_000, -8, 6);
-        let coll_pool = make_pool(15_000_000_000, -8, 9);
-        let debt_pos = position(0, 10_000_000);
-        let coll_pos = position(1_000_000_000, 0);
-
-        let global_coll = WAD * 80 / 100;
-        let global_debt = WAD;
-
-        // repay_amount = 0 → min(0, close_factor) = 0
-        // token_to_usd_wad(0, ...) = 0, wad_mul(0, bonus) = 0
-        // usd_wad_to_tokens(0, ...) = 0
-        // 0 > coll_deposit? No. But protocol_fee=0, liquidator_gets=0
-        let (repay, _, _, _) = compute_cross_liquidation_terms(
-            &debt_pool, &debt_pos, &coll_pool, &coll_pos, 0,
-            global_coll, global_debt,
-        ).unwrap();
-        assert_eq!(repay, 0);
-    }
-}

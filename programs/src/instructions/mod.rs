@@ -1,10 +1,10 @@
-mod borrow;
-mod collect_fees;
-mod cross_borrow;
-mod cross_liquidate;
-mod cross_repay;
-mod cross_withdraw;
-mod deposit;
+pub(crate) mod borrow;
+pub(crate) mod collect_fees;
+pub(crate) mod cross_borrow;
+pub(crate) mod cross_liquidate;
+pub(crate) mod cross_repay;
+pub(crate) mod cross_withdraw;
+pub(crate) mod deposit;
 mod enable_privacy;
 mod init_position;
 mod flash_borrow;
@@ -13,7 +13,7 @@ mod ika_register;
 mod ika_release;
 mod ika_sign;
 mod initialize;
-mod liquidate;
+pub(crate) mod liquidate;
 #[cfg(feature = "testing")]
 mod mock_fees;
 #[cfg(feature = "testing")]
@@ -28,7 +28,7 @@ mod resume_pool;
 mod set_pool_decimals;
 mod update_oracle_price;
 mod update_pool;
-mod withdraw;
+pub(crate) mod withdraw;
 
 pub use borrow::Borrow;
 pub use collect_fees::CollectFees;

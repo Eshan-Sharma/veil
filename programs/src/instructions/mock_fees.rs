@@ -8,6 +8,7 @@ ONLY FOR TESTING/SHOWCASE.
 use pinocchio::{account::AccountView, Address, ProgramResult};
 use crate::errors::LendError;
 use crate::state::LendingPool;
+use super::mock_oracle::enforce_mock_admin;
 
 pub struct MockFees;
 
@@ -18,9 +19,9 @@ impl MockFees {
         if accounts.len() < 2 {
             return Err(LendError::InvalidInstructionData.into());
         }
-        if !accounts[0].is_signer() {
-            return Err(LendError::MissingSignature.into());
-        }
+        // Hardcoded-admin check, even when `--features testing` is on. See
+        // `mock_oracle::MOCK_ADMIN` for rationale.
+        enforce_mock_admin(&accounts[0])?;
         let pool = LendingPool::from_account_mut(&accounts[1])?;
         pool.accumulated_fees = pool.accumulated_fees.saturating_add(100_000_000);
         Ok(())

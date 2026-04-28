@@ -11,7 +11,10 @@ Instruction data (after discriminator 0x0F): none
 
 use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
 
-use crate::{errors::LendError, state::LendingPool};
+use crate::{
+    errors::LendError,
+    state::{check_program_owner, LendingPool},
+};
 
 pub struct ResumePool;
 
@@ -22,13 +25,15 @@ impl ResumePool {
         Ok(Self)
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 2 {
             return Err(LendError::InvalidInstructionData.into());
         }
         if !accounts[0].is_signer() {
             return Err(LendError::MissingSignature.into());
         }
+
+        check_program_owner(&accounts[1], program_id)?;
 
         let pool = LendingPool::from_account_mut(&accounts[1])?;
         if pool.authority != *accounts[0].address() {

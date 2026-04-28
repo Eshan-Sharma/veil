@@ -30,7 +30,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct CrossBorrow {
@@ -38,15 +38,15 @@ pub struct CrossBorrow {
 }
 
 /// Aggregated cross-collateral risk metrics (all WAD-scaled USD).
-struct CrossRisk {
-    ltv_weighted_collateral_usd: u128,
-    liq_weighted_collateral_usd: u128,
-    total_debt_usd: u128,
+pub(crate) struct CrossRisk {
+    pub(crate) ltv_weighted_collateral_usd: u128,
+    pub(crate) liq_weighted_collateral_usd: u128,
+    pub(crate) total_debt_usd: u128,
 }
 
 /// Read a pool's oracle data and compute the WAD-scaled USD value of a token amount.
 #[inline(always)]
-fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
+pub(crate) fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramError> {
     if pool.pyth_price_feed == [0u8; 32].into() {
         return Err(LendError::OracleNotAnchored.into());
     }
@@ -55,7 +55,7 @@ fn pool_token_to_usd(pool: &LendingPool, amount: u64) -> Result<u128, ProgramErr
 
 /// Accumulate collateral USD values from a (pool, position) pair.
 #[inline(always)]
-fn accumulate_collateral(
+pub(crate) fn accumulate_collateral(
     pool: &LendingPool,
     pos: &UserPosition,
     user: &Address,
@@ -87,7 +87,7 @@ fn accumulate_collateral(
 /// Validate cross-borrow risk constraints.
 /// Returns (existing_debt, authority_bump).
 #[inline(always)]
-fn validate_cross_borrow(
+pub(crate) fn validate_cross_borrow(
     borrow_pool: &LendingPool,
     borrow_pos: &UserPosition,
     amount: u64,
@@ -163,9 +163,14 @@ impl CrossBorrow {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
+        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[1], program_id)?; // borrow_pool
         check_program_owner(&accounts[2], program_id)?; // borrow_position
+        check_token_program(&accounts[6])?;
+        {
+            let pool = LendingPool::from_account(&accounts[1])?;
+            check_vault(&accounts[3], pool)?;
+        }
 
         // ── Accrue interest on borrow pool ───────────────────────────────
         let clock = Clock::get()?;
@@ -269,355 +274,70 @@ impl CrossBorrow {
             pool.total_borrows = pool.total_borrows.saturating_add(self.amount);
         }
 
-        // ── Mark collateral positions as cross-collateral ────────────────
+        // ── Mark every involved position with a fresh set id ─────────────
+        // Total positions in the arrangement = collateral pairs + borrow pos.
+        let cross_count: u8 = (num_pairs + 1)
+            .try_into()
+            .map_err(|_| ProgramError::InvalidArgument)?;
+
+        // Generate a set id from the slot/timestamp. Two distinct cross-borrow
+        // calls in the same slot from the same user are rejected at the
+        // collision-time uniqueness check below — the id only needs to differ
+        // from existing set ids on involved positions.
+        let set_id: u64 = (clock.slot as u64)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(clock.unix_timestamp as u64)
+            .wrapping_add(self.amount);
+        let set_id = if set_id == 0 { 1 } else { set_id };
+
+        // Reject if any involved position is already in a different cross-set.
+        // Re-using positions already cross-linked elsewhere would let a user
+        // double-pledge collateral.
+        for i in 0..num_pairs {
+            let coll_pos_idx = 7 + i * 2 + 1;
+            let coll_pos = UserPosition::from_account(&accounts[coll_pos_idx])?;
+            if coll_pos.cross_collateral != 0 && coll_pos.cross_set_id != set_id {
+                return Err(LendError::CrossCollateralActive.into());
+            }
+        }
+        {
+            let borrow_pos = UserPosition::from_account(&accounts[2])?;
+            if borrow_pos.cross_collateral != 0 && borrow_pos.cross_set_id != set_id {
+                return Err(LendError::CrossCollateralActive.into());
+            }
+        }
+
+        // Reject duplicate pool addresses (substitution / double-counting).
+        for i in 0..num_pairs {
+            let pool_i = *accounts[7 + i * 2].address();
+            if pool_i == *accounts[1].address() {
+                return Err(LendError::DuplicateCrossPosition.into());
+            }
+            for j in (i + 1)..num_pairs {
+                let pool_j = *accounts[7 + j * 2].address();
+                if pool_i == pool_j {
+                    return Err(LendError::DuplicateCrossPosition.into());
+                }
+            }
+        }
+
         for i in 0..num_pairs {
             let coll_pos_idx = 7 + i * 2 + 1;
             let coll_pos = UserPosition::from_account_mut(&accounts[coll_pos_idx])?;
             coll_pos.cross_collateral = 1;
+            coll_pos.cross_set_id = set_id;
+            coll_pos.cross_count = cross_count;
+        }
+        // Also mark the borrow pool position so a plain Withdraw on its
+        // collateral cannot bypass the global HF check.
+        {
+            let borrow_pos = UserPosition::from_account_mut(&accounts[2])?;
+            borrow_pos.cross_collateral = 1;
+            borrow_pos.cross_set_id = set_id;
+            borrow_pos.cross_count = cross_count;
         }
 
         Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::{LIQ_THRESHOLD, LTV, WAD};
-
-    fn make_pool(
-        total_deposits: u64,
-        total_borrows: u64,
-        oracle_price: i64,
-        oracle_expo: i32,
-        token_decimals: u8,
-    ) -> LendingPool {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        pool.discriminator = LendingPool::DISCRIMINATOR;
-        pool.borrow_index = WAD;
-        pool.supply_index = WAD;
-        pool.ltv = LTV;
-        pool.liquidation_threshold = LIQ_THRESHOLD;
-        pool.authority_bump = 5;
-        pool.total_deposits = total_deposits;
-        pool.total_borrows = total_borrows;
-        pool.pyth_price_feed = [1u8; 32].into();
-        pool.oracle_price = oracle_price;
-        pool.oracle_expo = oracle_expo;
-        pool.token_decimals = token_decimals;
-        pool
-    }
-
-    fn make_position(deposit_shares: u64, borrow_principal: u64) -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.deposit_shares = deposit_shares;
-        pos.borrow_principal = borrow_principal;
-        pos.deposit_index_snapshot = WAD;
-        pos.borrow_index_snapshot = WAD;
-        pos
-    }
-
-    #[test]
-    fn pool_token_to_usd_rejects_no_oracle() {
-        let mut pool = make_pool(1000, 0, 100_000_000, -8, 6);
-        pool.pyth_price_feed = [0u8; 32].into();
-        assert!(pool_token_to_usd(&pool, 1_000_000).is_err());
-    }
-
-    #[test]
-    fn pool_token_to_usd_usdc() {
-        let pool = make_pool(1000, 0, 100_000_000, -8, 6);
-        let usd = pool_token_to_usd(&pool, 1_000_000).unwrap();
-        assert_eq!(usd, WAD); // $1.00
-    }
-
-    #[test]
-    fn accumulate_collateral_adds_weighted_usd() {
-        let pool = make_pool(10_000_000, 0, 100_000_000, -8, 6); // USDC pool
-        let user = [42u8; 32].into();
-        let pool_addr = [99u8; 32].into();
-        let mut pos = make_position(10_000_000, 0); // 10 USDC
-        pos.owner = user;
-        pos.pool = pool_addr;
-
-        let mut risk = CrossRisk {
-            ltv_weighted_collateral_usd: 0,
-            liq_weighted_collateral_usd: 0,
-            total_debt_usd: 0,
-        };
-
-        accumulate_collateral(&pool, &pos, &user, &pool_addr, &mut risk).unwrap();
-
-        // 10 USDC = $10 = 10 * WAD
-        // LTV-weighted = 10 * 0.75 = 7.5 * WAD
-        // Liq-weighted = 10 * 0.80 = 8.0 * WAD
-        assert_eq!(risk.ltv_weighted_collateral_usd, WAD * 75 / 10);
-        assert_eq!(risk.liq_weighted_collateral_usd, WAD * 8);
-    }
-
-    #[test]
-    fn validate_cross_borrow_rejects_paused() {
-        let mut pool = make_pool(10_000_000, 0, 15_000_000_000, -8, 9);
-        pool.paused = 1;
-        let pos = make_position(0, 0);
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 1000 * WAD,
-            liq_weighted_collateral_usd: 1000 * WAD,
-            total_debt_usd: 0,
-        };
-        assert_eq!(
-            validate_cross_borrow(&pool, &pos, 1, &risk),
-            Err(LendError::PoolPaused.into())
-        );
-    }
-
-    #[test]
-    fn validate_cross_borrow_rejects_exceeds_ltv() {
-        // USDC collateral: $100 × 0.75 LTV = $75 max borrow
-        // Borrow SOL: try $80 worth → should fail
-        let sol_pool = make_pool(10_000_000_000, 0, 15_000_000_000, -8, 9);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD, // $75 LTV-weighted
-            liq_weighted_collateral_usd: 80 * WAD, // $80 liq-weighted
-            total_debt_usd: 0,
-        };
-
-        // $80 worth of SOL at $150 = 533_333_333 lamports ≈ 0.533 SOL
-        // token_to_usd_wad(533_333_334, 15e9, -8, 9) ≈ $80
-        // This exceeds $75 LTV cap
-        let amount_sol = 533_333_334u64;
-        let result = validate_cross_borrow(&sol_pool, &pos, amount_sol, &risk);
-        assert_eq!(result, Err(LendError::ExceedsCollateralFactor.into()));
-    }
-
-    #[test]
-    fn validate_cross_borrow_accepts_within_ltv() {
-        // $100 USDC collateral, LTV $75, borrow $50 SOL → ok
-        let sol_pool = make_pool(10_000_000_000, 0, 15_000_000_000, -8, 9);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // $50 of SOL at $150 = 333_333_333 lamports
-        let amount_sol = 333_333_333u64;
-        let result = validate_cross_borrow(&sol_pool, &pos, amount_sol, &risk);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn validate_cross_borrow_rejects_insufficient_liquidity() {
-        // USDC pool with limited liquidity (6 decimals, price $1)
-        let usdc_pool = make_pool(1_000_000, 500_000, 100_000_000, -8, 6);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 10_000 * WAD,
-            liq_weighted_collateral_usd: 10_000 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // Available = 1_000_000 - 500_000 = 500_000. Try borrowing 600_000.
-        let result = validate_cross_borrow(&usdc_pool, &pos, 600_000, &risk);
-        assert_eq!(result, Err(LendError::InsufficientLiquidity.into()));
-    }
-
-    // ── Positive: borrow exactly at LTV boundary ─────────────────────────
-
-    #[test]
-    fn validate_cross_borrow_accepts_exact_ltv_boundary() {
-        // $100 USDC collateral, LTV $75, borrow exactly $75 worth of USDC
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // 75 USDC = 75_000_000 units, value = $75
-        let result = validate_cross_borrow(&usdc_pool, &pos, 75_000_000, &risk);
-        assert!(result.is_ok(), "should accept borrow exactly at LTV cap");
-    }
-
-    // ── Negative: borrow 1 unit over LTV boundary ───────────────────────
-
-    #[test]
-    fn validate_cross_borrow_rejects_one_over_ltv() {
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // 75_000_001 USDC = $75.000001 → just over $75 cap
-        let result = validate_cross_borrow(&usdc_pool, &pos, 75_000_001, &risk);
-        assert_eq!(result, Err(LendError::ExceedsCollateralFactor.into()));
-    }
-
-    // ── Positive: existing debt + new borrow within LTV ─────────────────
-
-    #[test]
-    fn validate_cross_borrow_with_existing_debt_within_ltv() {
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let pos = make_position(0, 30_000_000); // 30 USDC existing debt
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0, // other pools
-        };
-
-        // Existing 30 USDC debt + 40 USDC new = 70 USDC < $75 cap
-        let result = validate_cross_borrow(&usdc_pool, &pos, 40_000_000, &risk);
-        assert!(result.is_ok());
-        let (existing_debt, _) = result.unwrap();
-        assert_eq!(existing_debt, 30_000_000);
-    }
-
-    // ── Negative: existing debt + new borrow exceeds LTV ────────────────
-
-    #[test]
-    fn validate_cross_borrow_with_existing_debt_exceeds_ltv() {
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let pos = make_position(0, 50_000_000); // 50 USDC existing debt
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // 50 existing + 30 new = 80 > $75 cap
-        let result = validate_cross_borrow(&usdc_pool, &pos, 30_000_000, &risk);
-        assert_eq!(result, Err(LendError::ExceedsCollateralFactor.into()));
-    }
-
-    // ── Positive: multi-collateral scenario ─────────────────────────────
-
-    #[test]
-    fn accumulate_multiple_collateral_pools() {
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let sol_pool = make_pool(10_000_000_000, 0, 15_000_000_000, -8, 9);
-
-        let user = [42u8; 32].into();
-        let usdc_addr = [1u8; 32].into();
-        let sol_addr = [2u8; 32].into();
-
-        let mut usdc_pos = make_position(100_000_000, 0); // $100 USDC
-        usdc_pos.owner = user;
-        usdc_pos.pool = usdc_addr;
-
-        let mut sol_pos = make_position(1_000_000_000, 0); // 1 SOL = $150
-        sol_pos.owner = user;
-        sol_pos.pool = sol_addr;
-
-        let mut risk = CrossRisk {
-            ltv_weighted_collateral_usd: 0,
-            liq_weighted_collateral_usd: 0,
-            total_debt_usd: 0,
-        };
-
-        accumulate_collateral(&usdc_pool, &usdc_pos, &user, &usdc_addr, &mut risk).unwrap();
-        accumulate_collateral(&sol_pool, &sol_pos, &user, &sol_addr, &mut risk).unwrap();
-
-        // USDC: $100 × 0.75 LTV = $75, $100 × 0.80 LT = $80
-        // SOL:  $150 × 0.75 LTV = $112.5, $150 × 0.80 LT = $120
-        // Total LTV = $187.5, Total LT = $200
-        assert_eq!(risk.ltv_weighted_collateral_usd, WAD * 1875 / 10);
-        assert_eq!(risk.liq_weighted_collateral_usd, WAD * 200);
-    }
-
-    // ── Negative: zero deposit collateral adds nothing ──────────────────
-
-    #[test]
-    fn accumulate_collateral_zero_deposit_adds_nothing() {
-        let pool = make_pool(0, 0, 100_000_000, -8, 6);
-        let user = [42u8; 32].into();
-        let pool_addr = [99u8; 32].into();
-        let mut pos = make_position(0, 0);
-        pos.owner = user;
-        pos.pool = pool_addr;
-
-        let mut risk = CrossRisk {
-            ltv_weighted_collateral_usd: 0,
-            liq_weighted_collateral_usd: 0,
-            total_debt_usd: 0,
-        };
-
-        accumulate_collateral(&pool, &pos, &user, &pool_addr, &mut risk).unwrap();
-        assert_eq!(risk.ltv_weighted_collateral_usd, 0);
-        assert_eq!(risk.liq_weighted_collateral_usd, 0);
-    }
-
-    // ── Negative: wrong owner binding ───────────────────────────────────
-
-    #[test]
-    fn accumulate_collateral_rejects_wrong_owner() {
-        let pool = make_pool(10_000_000, 0, 100_000_000, -8, 6);
-        let user = [42u8; 32].into();
-        let attacker = [99u8; 32].into();
-        let pool_addr = [1u8; 32].into();
-        let mut pos = make_position(10_000_000, 0);
-        pos.owner = attacker; // wrong owner
-        pos.pool = pool_addr;
-
-        let mut risk = CrossRisk {
-            ltv_weighted_collateral_usd: 0,
-            liq_weighted_collateral_usd: 0,
-            total_debt_usd: 0,
-        };
-
-        let result = accumulate_collateral(&pool, &pos, &user, &pool_addr, &mut risk);
-        assert!(result.is_err());
-    }
-
-    // ── Positive: HF exactly 1.0 is accepted ────────────────────────────
-
-    #[test]
-    fn validate_cross_borrow_accepts_hf_exactly_one() {
-        // $100 collateral, liq_threshold 80% → $80 weighted
-        // Borrow $80 → HF = $80 / $80 = 1.0 exactly → accepted
-        let usdc_pool = make_pool(100_000_000, 0, 100_000_000, -8, 6);
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 75 * WAD,
-            liq_weighted_collateral_usd: 80 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // Borrow 75 USDC = $75 → HF = $80 / $75 = 1.066… > 1.0 → ok
-        let result = validate_cross_borrow(&usdc_pool, &pos, 75_000_000, &risk);
-        assert!(result.is_ok());
-    }
-
-    // ── Negative: fees reduce available liquidity ────────────────────────
-
-    #[test]
-    fn validate_cross_borrow_fees_reduce_available() {
-        let mut pool = make_pool(1_000_000, 0, 100_000_000, -8, 6);
-        pool.accumulated_fees = 500_000; // half the pool is fees
-        let pos = make_position(0, 0);
-
-        let risk = CrossRisk {
-            ltv_weighted_collateral_usd: 10_000 * WAD,
-            liq_weighted_collateral_usd: 10_000 * WAD,
-            total_debt_usd: 0,
-        };
-
-        // Available = 1_000_000 - 0 - 500_000 = 500_000
-        let result = validate_cross_borrow(&pool, &pos, 600_000, &risk);
-        assert_eq!(result, Err(LendError::InsufficientLiquidity.into()));
-    }
-}

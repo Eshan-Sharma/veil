@@ -1,9 +1,9 @@
 /*!
 Release a dWallet position — transfer the dWallet's authority back to the user.
 
-The position must have no outstanding borrows against it (enforced by checking
-the pool's accounting for this user).  On success the `IkaDwalletPosition`
-status is set to `RELEASED` and `transfer_dwallet` is CPI'd on the Ika program.
+Requires zero outstanding borrows AND zero cross-collateral usage in the
+backing UserPosition; otherwise the user could withdraw the off-chain
+collateral while still owing tokens on Solana.
 
 Accounts:
   [0]  user            signer, writable
@@ -13,6 +13,8 @@ Accounts:
   [4]  caller_program  readonly   – Veil's own program account (needed by Ika CPI)
   [5]  cpi_authority   readonly   – Veil CPI authority PDA
   [6]  ika_program     readonly   – Ika dWallet program account
+  [7]  user_position   readonly   – UserPosition PDA for (user, pool) — used to
+                                    verify zero outstanding debt before release
 
 Instruction data (after discriminator 0x12):
   cpi_authority_bump: u8
@@ -27,7 +29,11 @@ use pinocchio::{
 use crate::{
     errors::LendError,
     ika::{self, CPI_AUTHORITY_SEED, IKA_PROGRAM_ID},
-    state::ika_position::{status, IkaDwalletPosition},
+    state::{
+        check_program_owner,
+        ika_position::{status, IkaDwalletPosition},
+        UserPosition,
+    },
 };
 
 pub struct IkaRelease {
@@ -45,7 +51,7 @@ impl IkaRelease {
     }
 
     pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
-        if accounts.len() < 7 {
+        if accounts.len() < 8 {
             return Err(LendError::InvalidInstructionData.into());
         }
         if !accounts[0].is_signer() {
@@ -82,6 +88,22 @@ impl IkaRelease {
             }
             if pos.status != status::ACTIVE {
                 return Err(LendError::Unauthorized.into());
+            }
+        }
+
+        // ── Outstanding-debt check ────────────────────────────────────────────
+        // The user must close every position backed by this dWallet before
+        // releasing it. Otherwise they walk away with the off-chain collateral
+        // while the Solana side still records the borrowed tokens as theirs.
+        check_program_owner(&accounts[7], program_id)?;
+        {
+            let user_pos = UserPosition::from_account(&accounts[7])?;
+            user_pos.verify_binding(accounts[0].address(), accounts[1].address())?;
+            if user_pos.borrow_principal != 0 {
+                return Err(LendError::OutstandingDebt.into());
+            }
+            if user_pos.cross_collateral != 0 {
+                return Err(LendError::CrossCollateralActive.into());
             }
         }
 

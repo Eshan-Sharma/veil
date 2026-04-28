@@ -11,6 +11,7 @@ Accounts:
   [3]  pool              writable
   [4]  user_position     writable
   [5]  token_program
+  [6..N]  cross-collateral positions to release (writable) — optional
 
 Instruction data (after discriminator 0x04):
   amount: u64 LE
@@ -27,7 +28,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct Repay {
@@ -57,9 +58,14 @@ impl Repay {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
+        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[3], program_id)?; // pool
         check_program_owner(&accounts[4], program_id)?; // user_position
+        check_token_program(&accounts[5])?;
+        {
+            let pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
+        }
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
@@ -86,7 +92,13 @@ impl Repay {
             (debt, pool.borrow_index)
         };
 
-        let repay_amount = self.amount.min(total_debt);
+        // Reject over-repayment instead of silently capping. Letting the
+        // program quietly transfer less than the user requested makes wallet
+        // UX confusing and hides bookkeeping errors in upstream tooling.
+        if self.amount > total_debt {
+            return Err(LendError::ExceedsDebtBalance.into());
+        }
+        let repay_amount = self.amount;
 
         // ── Token transfer: user → vault ──────────────────────────────────
         Transfer::new(&accounts[1], &accounts[2], &accounts[0], repay_amount).invoke()?;
@@ -100,10 +112,35 @@ impl Repay {
         }
 
         // ── Update pool totals ────────────────────────────────────────────
+        // total_deposits is NOT incremented: depositor claims are unchanged by
+        // a repay. Interest already updated total_deposits via accrue_interest.
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             pool.total_borrows = pool.total_borrows.saturating_sub(repay_amount);
-            pool.total_deposits = pool.total_deposits.saturating_add(repay_amount);
+        }
+
+        // ── Release cross-collateral flags when debt is fully cleared ────
+        // Without this, collateral pools that were marked during a CrossBorrow
+        // remain locked and the user is forced through CrossWithdraw forever.
+        if new_debt == 0 {
+            // Clear the flag on the local position too (it may have been set
+            // when this position served as cross-collateral elsewhere).
+            {
+                let pos = UserPosition::from_account_mut(&accounts[4])?;
+                pos.cross_collateral = 0;
+                pos.cross_set_id = 0;
+                pos.cross_count = 0;
+            }
+            let trailing = &accounts[6..];
+            for acc in trailing {
+                check_program_owner(acc, program_id)?;
+                let coll_pos = UserPosition::from_account_mut(acc)?;
+                if &coll_pos.owner == accounts[0].address() && coll_pos.cross_collateral != 0 {
+                    coll_pos.cross_collateral = 0;
+                    coll_pos.cross_set_id = 0;
+                    coll_pos.cross_count = 0;
+                }
+            }
         }
 
         Ok(())
