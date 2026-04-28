@@ -19,10 +19,10 @@ import { buildInitializePoolTx } from "../lib/veil/initialize";
 import {
   updatePoolIx,
   depositIx,
-  mockOracleIx,
   setPoolDecimalsIx,
   crossBorrowIx,
 } from "../lib/veil/instructions";
+import { mockOracleIx } from "./_mock-instructions";
 import {
   findPositionAddress,
   findPoolAuthorityAddress,
@@ -30,6 +30,7 @@ import {
 } from "../lib/veil/pda";
 import { WAD } from "../lib/veil/constants";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ function fail(msg: string) {
 
 async function main() {
   const connection = new Connection("http://127.0.0.1:8899", "confirmed");
-  const keypairPath = path.resolve("/Users/eshan/my-solana-testing-dev-wallet.json");
+  const keypairPath = process.env.PAYER_KEYPAIR ?? path.join(os.homedir(), ".config/solana/id.json");
   const secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(keypairPath, "utf-8")));
   const admin = Keypair.fromSecretKey(secretKey);
 

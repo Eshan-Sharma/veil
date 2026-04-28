@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS tx_log (
   signature       TEXT UNIQUE NOT NULL,
   pool_address    TEXT,
   wallet          TEXT NOT NULL,
-  action          TEXT NOT NULL, -- 'deposit'|'withdraw'|'borrow'|'repay'|'liquidate'|'flash'|'init'|'update_pool'|'pause'|'resume'|'collect_fees'|'update_oracle'
+  action          TEXT NOT NULL, -- deposit|withdraw|borrow|repay|liquidate|cross_*|flash*|init|init_position|update_pool|pause|resume|collect_fees|update_oracle|set_pool_decimals
   amount          NUMERIC,
   status          TEXT NOT NULL DEFAULT 'pending', -- 'pending'|'confirmed'|'failed'
   error_msg       TEXT,

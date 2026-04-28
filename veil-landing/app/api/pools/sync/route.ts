@@ -2,25 +2,40 @@ import { NextResponse } from "next/server";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { sql } from "@/lib/db";
 import { decodeLendingPool } from "@/lib/veil/state";
+import { PROGRAM_ID } from "@/lib/veil/constants";
+import { serverRpcUrl } from "@/lib/network";
+import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
 /** Pulls a pool's on-chain state and upserts it into the DB cache.
- *  Public — anyone can call this (just refreshes our cache). */
+ *  Public — anyone can call this — but the RPC endpoint is fixed to the
+ *  server's trusted cluster URL (see C1 in SECURITY_AUDIT.md). The pool
+ *  account must also be owned by VEIL's program ID before we'll cache it,
+ *  otherwise the endpoint becomes a write-anywhere primitive (C2). */
 export async function POST(req: Request) {
-  let body: { pool_address?: string; symbol?: string; rpc?: string };
+  const limited = await rateLimit(req, { key: "pools.sync", max: 30, windowSec: 60 });
+  if (limited) return limited;
+
+  let body: { pool_address?: string; symbol?: string };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const poolAddr = body.pool_address;
   if (!poolAddr) return NextResponse.json({ error: "pool_address required" }, { status: 400 });
 
-  const rpc = typeof body.rpc === "string" && /^https?:\/\//.test(body.rpc)
-    ? body.rpc
-    : process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
-  const conn = new Connection(rpc, "confirmed");
-  let info;
-  try { info = await conn.getAccountInfo(new PublicKey(poolAddr)); }
+  let poolPk: PublicKey;
+  try { poolPk = new PublicKey(poolAddr); }
   catch (e) { return NextResponse.json({ error: `bad pubkey: ${(e as Error).message}` }, { status: 400 }); }
+
+  const conn = new Connection(serverRpcUrl(), "confirmed");
+  const info = await conn.getAccountInfo(poolPk);
   if (!info) return NextResponse.json({ error: "pool account not found" }, { status: 404 });
+
+  // Refuse to cache state from accounts not owned by Veil — otherwise an
+  // attacker could craft a fake program that returns a buffer matching
+  // POOL_SIZE and poison the DB with chosen oracle prices / LTV ratios.
+  if (!info.owner.equals(PROGRAM_ID)) {
+    return NextResponse.json({ error: "account not owned by veil program" }, { status: 400 });
+  }
 
   const p = decodeLendingPool(Buffer.from(info.data));
   const pythFeed = p.pythPriceFeed.toBase58();

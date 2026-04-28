@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as os from "os";
 import * as fs from "fs";
 import {
   Connection,
@@ -19,8 +20,8 @@ import {
   updatePoolIx,
   depositIx,
   borrowIx,
-  mockFeesIx,
 } from "../lib/veil/instructions";
+import { mockFeesIx } from "./_mock-instructions";
 import { findPositionAddress, findPoolAuthorityAddress } from "../lib/veil/pda";
 import { WAD } from "../lib/veil/constants";
 
@@ -100,7 +101,7 @@ const POOLS: PoolConfig[] = [
 
 async function main() {
   const connection = new Connection(RPC, "confirmed");
-  const keypairPath = path.resolve("/Users/eshan/my-solana-testing-dev-wallet.json");
+  const keypairPath = process.env.PAYER_KEYPAIR ?? path.join(os.homedir(), ".config/solana/id.json");
   const secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(keypairPath, "utf-8")));
   const payer = Keypair.fromSecretKey(secretKey);
 

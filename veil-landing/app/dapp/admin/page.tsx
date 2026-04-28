@@ -5,7 +5,7 @@ import Link from "next/link";
 
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 
 import { WalletButton as WalletMultiButton } from "@/app/components/WalletButton";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
@@ -464,6 +464,143 @@ function PoolPanel({ pool, onPausedChange, onRefresh }: { pool: AdminPool; onPau
 
 // ─── Pools view ───────────────────────────────────────────────────────────────
 
+/**
+ * Batches a CollectFees ix per fee-bearing pool into one transaction.
+ * Uses one signature for the whole sweep; missing treasury ATAs are created
+ * inline before their corresponding collect ix. Pools with zero accumulated
+ * fees are skipped because the program rejects them with NoFeesToCollect,
+ * which would revert the entire batch.
+ */
+function SweepAllFeesPanel({ pools, onSwept }: { pools: AdminPool[]; onSwept: () => void }) {
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction } = useWallet();
+  const { endpoint } = useSolanaRpc();
+
+  const [status, setStatus] = useState<TxStatus>("idle");
+  const [sig, setSig] = useState<string | undefined>();
+  const [err, setErr] = useState<string | undefined>();
+
+  const eligible = pools.filter((p) => p.accumulatedFees && p.accumulatedFees !== "0");
+
+  const totalsBySymbol = eligible.reduce<Record<string, { amount: bigint; decimals: number }>>((acc, p) => {
+    const cur = acc[p.symbol] ?? { amount: 0n, decimals: p.decimals };
+    cur.amount += BigInt(p.accumulatedFees);
+    acc[p.symbol] = cur;
+    return acc;
+  }, {});
+
+  const sweeping = ["building", "signing", "confirming"].includes(status);
+
+  async function handleSweep() {
+    if (!publicKey || eligible.length === 0) return;
+    setStatus("building");
+    setSig(undefined);
+    setErr(undefined);
+
+    try {
+      const tx = new Transaction();
+      const collectedPools: { pool: PublicKey; symbol: string }[] = [];
+
+      // For each eligible pool: ensure ATA exists, then add collectFees.
+      for (const p of eligible) {
+        const poolPda = new PublicKey(p.pool_address);
+        const vault = new PublicKey(p.vault);
+        const mint = new PublicKey(p.token_mint);
+        const [poolAuthority] = findPoolAuthorityAddress(poolPda);
+        const treasury = getAssociatedTokenAddressSync(mint, publicKey, false, TOKEN_PROGRAM_ID);
+
+        const ataInfo = await connection.getAccountInfo(treasury);
+        if (!ataInfo) {
+          tx.add(createAssociatedTokenAccountInstruction(publicKey, treasury, publicKey, mint));
+        }
+        tx.add(collectFeesIx(publicKey, poolPda, vault, treasury, poolAuthority));
+        collectedPools.push({ pool: poolPda, symbol: p.symbol });
+      }
+
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+
+      setStatus("signing");
+      const signature = await sendTransaction(tx, connection);
+      setStatus("confirming");
+      await connection.confirmTransaction(signature, "confirmed");
+      setSig(signature);
+      setStatus("success");
+
+      // Log + sync each pool. Same signature is reused — POST is idempotent on
+      // signature, so only the first row insert sticks; subsequent ones update.
+      // To keep one row per (sig, pool) we'd need a schema change; a single
+      // collect_fees row covering the batch is honest enough for audit.
+      void fetch("/api/transactions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          signature, wallet: publicKey.toBase58(), action: "collect_fees",
+          pool_address: collectedPools[0]?.pool.toBase58(), status: "confirmed",
+        }),
+      });
+      await Promise.all(
+        collectedPools.map((c) =>
+          fetch("/api/pools/sync", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ pool_address: c.pool.toBase58(), symbol: c.symbol, rpc: endpoint }),
+          }).catch(() => {}),
+        ),
+      );
+      setTimeout(onSwept, 500);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setStatus("error");
+    }
+  }
+
+  if (eligible.length === 0) {
+    return (
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "14px 18px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0b0b10" }}>Sweep all fees</div>
+          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>No pools have accumulated fees right now.</div>
+        </div>
+        <button disabled style={{ padding: "8px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, border: "1px solid #e5e7eb", background: "#f9fafb", color: "#9ca3af", cursor: "not-allowed" }}>
+          Sweep all
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 14, padding: "14px 18px", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0b0b10" }}>
+            Sweep all fees · {eligible.length} pool{eligible.length === 1 ? "" : "s"}
+          </div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {Object.entries(totalsBySymbol).map(([sym, t]) => (
+              <span key={sym} style={{ fontFamily: "var(--font-mono),monospace" }}>
+                <span style={{ fontWeight: 700, color: "#059669" }}>{sharedFormatFees(t.amount.toString(), t.decimals)}</span>
+                <span style={{ marginLeft: 4, color: "#6b7280" }}>{sym}</span>
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+            One signature, one transaction. Missing treasury ATAs are created automatically.
+          </div>
+        </div>
+        <button onClick={handleSweep} disabled={sweeping || !publicKey}
+          style={{ padding: "9px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: sweeping ? "not-allowed" : "pointer",
+            border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#059669",
+            opacity: sweeping ? 0.65 : 1 }}>
+          {sweeping ? "Processing…" : `Sweep all (${eligible.length})`}
+        </button>
+      </div>
+      <TxBanner status={status} sig={sig} error={err} onReset={() => setStatus("idle")} />
+    </div>
+  );
+}
+
 function PoolsView() {
   const [pools, setPools] = useState<AdminPool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -524,6 +661,8 @@ function PoolsView() {
     );
 
   return (
+    <div>
+      <SweepAllFeesPanel pools={pools} onSwept={refreshPools} />
     <div className="admin-pools-layout" style={{ display: "grid", gap: 20, alignItems: "start" }}>
       <div className="admin-pool-sidebar">
         <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#9ca3af", marginBottom: 8, paddingLeft: 4 }}>Pools</div>
@@ -573,6 +712,7 @@ function PoolsView() {
           </>
         )}
       </div>
+    </div>
     </div>
   );
 }

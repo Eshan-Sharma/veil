@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import { getRpcLabel, type SolanaRpcPreset } from "@/lib/solana/rpc";
 
-const presets: SolanaRpcPreset[] = ["devnet", "mainnet", "localnet", "custom"];
+const presets: SolanaRpcPreset[] = ["devnet", "mainnet", "localnet"];
 
 interface RpcSwitcherProps {
   open: boolean;
@@ -12,21 +12,9 @@ interface RpcSwitcherProps {
 }
 
 export const RpcSwitcher = ({ open, onClose }: RpcSwitcherProps) => {
-  const { preset, customRpc, endpoint, setPreset, setCustomRpc } = useSolanaRpc();
-  const [draft, setDraft] = useState(customRpc);
-
-  useEffect(() => {
-    setDraft(customRpc);
-  }, [customRpc]);
+  const { preset, endpoint, setPreset } = useSolanaRpc();
 
   if (!open) return null;
-
-  const applyCustomRpc = () => {
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    setCustomRpc(trimmed);
-    setPreset("custom");
-  };
 
   return (
     <>
@@ -56,25 +44,6 @@ export const RpcSwitcher = ({ open, onClose }: RpcSwitcherProps) => {
             ))}
           </select>
         </label>
-
-        {preset === "custom" && (
-          <div style={{ display: "grid", gap: 8 }}>
-            <label style={label}>
-              <span style={labelText}>Custom RPC URL</span>
-              <input
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onBlur={applyCustomRpc}
-                placeholder="http://127.0.0.1:8899"
-                spellCheck={false}
-                style={input}
-              />
-            </label>
-            <button onClick={applyCustomRpc} style={button}>
-              Apply RPC
-            </button>
-          </div>
-        )}
 
         <div style={meta}>
           <div style={metaLabel}>Active endpoint</div>
@@ -160,30 +129,6 @@ const select: CSSProperties = {
   color: "#111827",
   fontSize: 13,
   outline: "none",
-};
-
-const input: CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #e5e7eb",
-  background: "#f9fafb",
-  color: "#111827",
-  fontSize: 12.5,
-  outline: "none",
-  boxSizing: "border-box",
-  fontFamily: "var(--font-mono),monospace",
-};
-
-const button: CSSProperties = {
-  border: "1px solid #111827",
-  borderRadius: 10,
-  background: "#111827",
-  color: "#fff",
-  fontSize: 12.5,
-  fontWeight: 600,
-  padding: "9px 12px",
-  cursor: "pointer",
 };
 
 const meta: CSSProperties = {

@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 import { sql, type PositionRow } from "@/lib/db";
+import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ user: string }> },
 ) {
+  const limited = await rateLimit(req, { key: "positions.byuser", max: 120, windowSec: 60 });
+  if (limited) return limited;
+
   const { user } = await ctx.params;
   if (!user) return NextResponse.json({ error: "user required" }, { status: 400 });
   const rows = await sql`

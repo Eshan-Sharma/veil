@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
 import {
   Connection,
   Keypair,
@@ -39,7 +40,7 @@ import { WAD } from "../lib/veil/constants";
 const RPC = "http://localhost:8899";
 const API = "http://localhost:3000";
 const SOL_POOL = new PublicKey("HCyW3ya5BQLABUv4TS6EJm9QNAmz1L3uMsbCMQUvXc7c");
-const PAYER_PATH = "/Users/eshan/my-solana-testing-dev-wallet.json";
+const PAYER_PATH = process.env.PAYER_KEYPAIR ?? path.join(homedir(), ".config/solana/id.json");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
