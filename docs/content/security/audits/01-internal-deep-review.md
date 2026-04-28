@@ -1,4 +1,9 @@
-# VEIL LENDING PROTOCOL — SECURITY AUDIT REPORT
+---
+title: "01 — Internal Deep Review"
+description: Internal deep audit of Veil's on-chain math, oracle handling, frontend, and API surface.
+---
+
+# Internal Deep Review
 
 **Date:** 2026-04-27
 **Auditor:** Internal deep review (on-chain, math, oracle, frontend, API)
