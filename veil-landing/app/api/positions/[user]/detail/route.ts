@@ -70,7 +70,9 @@ export async function GET(
       pl.optimal_util_wad AS pool_optimal_util_wad,
       pl.slope1_wad       AS pool_slope1_wad,
       pl.slope2_wad       AS pool_slope2_wad,
-      pl.reserve_factor_wad AS pool_reserve_factor_wad
+      pl.reserve_factor_wad AS pool_reserve_factor_wad,
+      pl.oracle_price,
+      pl.oracle_expo
     FROM positions p
     JOIN pools pl ON pl.pool_address = p.pool_address
     WHERE p.owner = ${user}
@@ -92,6 +94,40 @@ export async function GET(
     if (!pool) continue;
     (txByPool[pool] ??= []).push(tx);
   }
+
+  // ── Compute account-level (cross-collateral) health factor ───────────────
+  // Mirrors Aave: HF = Σ(deposit_usd × liq_threshold) / Σ(debt_usd)
+  let weightedCollateralUsd = 0n;
+  let totalDebtUsd = 0n;
+
+  for (const r of posRows) {
+    const shares = BigInt(r.deposit_shares || "0");
+    const principal = BigInt(r.borrow_principal || "0");
+    const sIdx = BigInt(r.supply_index || WAD.toString());
+    const bIdx = BigInt(r.borrow_index || WAD.toString());
+    const bSnap = BigInt(r.borrow_idx_snap || WAD.toString());
+    const liqT = BigInt(r.pool_liq_threshold_wad || WAD.toString());
+    const decimals = Number(r.decimals ?? 9);
+    const oraclePrice = BigInt(r.oracle_price ?? "0");
+    const oracleExpo = Number(r.oracle_expo ?? -8);
+
+    const depTokens = (shares * sIdx) / WAD;
+    const debtTokens = bSnap > 0n ? (principal * bIdx) / bSnap : 0n;
+
+    // tokenToUsdWad: amount × |price| × 10^(18 + expo - decimals)
+    const scaleExp = 18 + oracleExpo - decimals;
+    const factor = scaleExp >= 0 ? 10n ** BigInt(scaleExp) : 1n;
+    const divisor = scaleExp < 0 ? 10n ** BigInt(-scaleExp) : 1n;
+    const price = oraclePrice < 0n ? -oraclePrice : oraclePrice;
+
+    const depUsd = scaleExp >= 0 ? depTokens * price * factor : (depTokens * price) / divisor;
+    const debtUsd = scaleExp >= 0 ? debtTokens * price * factor : (debtTokens * price) / divisor;
+
+    weightedCollateralUsd += (depUsd * liqT) / WAD;
+    totalDebtUsd += debtUsd;
+  }
+
+  const accountHF = totalDebtUsd === 0n ? WAD : (weightedCollateralUsd * WAD) / totalDebtUsd;
 
   const positions = posRows.map((r) => {
     const depositShares = BigInt(r.deposit_shares || "0");
@@ -139,6 +175,7 @@ export async function GET(
       symbol: r.symbol,
       decimals: r.decimals ?? 9,
       health_factor_wad: freshHF,
+      account_health_factor_wad: accountHF.toString(),
       last_synced_at: r.last_synced_at,
       deposit_shares: r.deposit_shares,
       borrow_principal: r.borrow_principal,

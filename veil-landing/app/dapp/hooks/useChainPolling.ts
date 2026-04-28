@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { decodeLendingPool, decodeUserPosition, sharesToTokens, borrowDebt, healthFactor } from "@/lib/veil/state";
+import { decodeLendingPool, decodeUserPosition, sharesToTokens, borrowDebt, healthFactor, accountHealthFactor } from "@/lib/veil/state";
+import type { CrossHFInput } from "@/lib/veil/state";
 import { findPositionAddress } from "@/lib/veil/pda";
 
 export type ChainPositionUpdate = {
@@ -13,6 +14,8 @@ export type ChainPositionUpdate = {
   borrow_principal: string;
   borrow_debt: string;
   health_factor_wad: string;
+  /** Account-level HF across all positions (Aave-style). Same value on every entry. */
+  account_health_factor_wad: string;
 };
 
 /**
@@ -48,7 +51,10 @@ export function useChainPolling(
     try {
       // Single RPC call for all accounts
       const infos = await conn.getMultipleAccountsInfo(keys);
-      const results: ChainPositionUpdate[] = [];
+
+      // First pass: decode all pools + positions, collect cross-HF inputs
+      const decoded: { pool: ReturnType<typeof decodeLendingPool>; pos: ReturnType<typeof decodeUserPosition>; idx: number }[] = [];
+      const crossInputs: CrossHFInput[] = [];
 
       for (let i = 0; i < poolAddresses.length; i++) {
         const poolInfo = infos[i * 2];
@@ -57,7 +63,27 @@ export function useChainPolling(
 
         const pool = decodeLendingPool(new Uint8Array(poolInfo.data));
         const pos = decodeUserPosition(new Uint8Array(posInfo.data));
+        decoded.push({ pool, pos, idx: i });
 
+        crossInputs.push({
+          depositShares: pos.depositShares,
+          borrowPrincipal: pos.borrowPrincipal,
+          supplyIndex: pool.supplyIndex,
+          borrowIndex: pool.borrowIndex,
+          borrowIndexSnapshot: pos.borrowIndexSnapshot,
+          liquidationThreshold: pool.liquidationThreshold,
+          oraclePrice: pool.oraclePrice,
+          oracleExpo: pool.oracleExpo,
+          tokenDecimals: pool.tokenDecimals,
+        });
+      }
+
+      // Compute account-level HF once across all positions
+      const acctHF = accountHealthFactor(crossInputs);
+
+      // Second pass: build results with both per-pool and account HF
+      const results: ChainPositionUpdate[] = [];
+      for (const { pool, pos, idx } of decoded) {
         const depTokens = sharesToTokens(pos.depositShares, pool.supplyIndex);
         const debt = borrowDebt(pos.borrowPrincipal, pool.borrowIndex, pos.borrowIndexSnapshot);
         const hf = healthFactor(
@@ -67,13 +93,14 @@ export function useChainPolling(
         );
 
         results.push({
-          position_address: findPositionAddress(poolPks[i], userKey)[0].toBase58(),
-          pool_address: poolAddresses[i],
+          position_address: findPositionAddress(poolPks[idx], userKey)[0].toBase58(),
+          pool_address: poolAddresses[idx],
           deposit_shares: pos.depositShares.toString(),
           deposit_tokens: depTokens.toString(),
           borrow_principal: pos.borrowPrincipal.toString(),
           borrow_debt: debt.toString(),
           health_factor_wad: hf.toString(),
+          account_health_factor_wad: acctHF.toString(),
         });
       }
 
