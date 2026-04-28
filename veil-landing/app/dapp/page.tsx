@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
 import Link from "next/link";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@/lib/veil";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
 import { buildExplorerTxUrl } from "@/lib/solana/rpc";
 import { formatPrice, formatUsd, tokenToUsd, type PythPrices } from "@/lib/pyth/prices";
@@ -13,12 +15,12 @@ import { WalletButton as WalletMultiButton } from "../components/WalletButton";
 import { RpcSwitcher } from "./components/RpcSwitcher";
 import { useVeilActions } from "./hooks/useVeilActions";
 import { usePythPrices } from "./hooks/usePythPrices";
+import { useChainPolling, type ChainPositionUpdate } from "./hooks/useChainPolling";
 import {
   wadToPctNum,
   wadToPctStr,
   formatBigAmount,
   numberWithCommas,
-  formatTokenAmount,
   shortAddr,
   estimateHF,
   formatHF,
@@ -27,7 +29,7 @@ import { getPoolType, getPoolIcon, getPoolColor, type PoolType } from "./lib/tok
 
 // ─── Types ──────────────────────���─────────────────────────────────────────────
 
-type View = "markets" | "portfolio" | "cross" | "flash" | "liquidate" | "history";
+type View = "markets" | "portfolio" | "flash" | "liquidate" | "history";
 type ModalType = "supply" | "borrow" | "withdraw" | "repay" | "ika-setup";
 
 type TxEntry = {
@@ -59,6 +61,8 @@ type DetailPosition = {
   utilization_pct: number;
   supply_txs: TxEntry[];
   borrow_txs: TxEntry[];
+  /** True when on-chain polling has confirmed this position account exists. */
+  on_chain?: boolean;
 };
 
 type PortfolioSide = "supply" | "borrow";
@@ -79,6 +83,16 @@ type VirtualRow = {
 type ModalState = {
   type: ModalType;
   pool: PoolView;
+  /** Max amount in base units string. */
+  maxAmount?: string;
+  /** Raw deposit_shares for withdraw — avoids lossy token→shares round-trip. */
+  maxShares?: string;
+  /** Principal in base units (deposit principal for withdraw, borrow principal for repay). */
+  principal?: string;
+  /** Interest in base units (earned for withdraw, owed for repay). */
+  interest?: string;
+  /** User's wallet token balance in base units. */
+  walletBalance?: string;
 };
 
 type ApiEndpoint = {
@@ -241,11 +255,62 @@ const InfoRow = ({ k, v, vc }: { k: string; v: string; vc?: string }) => {
   );
 };
 
+const ParamCard = ({ label, value, hint }: { label: string; value: string; hint: string }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      style={{ background: "#f9f9fb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f0f0f3", position: "relative", cursor: "default" }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <div style={{ fontSize: 10.5, color: "#5b5b66", fontWeight: 500, marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+        {label}
+        <span style={{ fontSize: 10, color: "#c4c4cc", cursor: "help" }}>ⓘ</span>
+      </div>
+      <div style={{ fontSize: 17, fontWeight: 700, color: "#0b0b10" }}>{value}</div>
+      {show && (
+        <div style={{
+          position: "absolute", left: 0, bottom: "calc(100% + 6px)", zIndex: 20,
+          background: "#1f2937", color: "#f9fafb", fontSize: 11, lineHeight: 1.5,
+          padding: "8px 12px", borderRadius: 8, maxWidth: 260, width: "max-content",
+          boxShadow: "0 4px 12px rgba(0,0,0,.18)", pointerEvents: "none",
+        }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const IrmParam = ({ k, v, hint }: { k: string; v: string; hint: string }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      style={{ background: "#f4f4f6", borderRadius: 6, padding: "3px 8px", fontSize: 11, position: "relative", cursor: "default" }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span style={{ color: "#9ca3af" }}>{k} </span>
+      <span style={{ fontWeight: 700, color: "#0b0b10" }}>{v}</span>
+      {show && (
+        <div style={{
+          position: "absolute", left: 0, bottom: "calc(100% + 6px)", zIndex: 20,
+          background: "#1f2937", color: "#f9fafb", fontSize: 11, lineHeight: 1.45,
+          padding: "6px 10px", borderRadius: 6, maxWidth: 220, width: "max-content",
+          boxShadow: "0 4px 12px rgba(0,0,0,.18)", pointerEvents: "none",
+        }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── IRM Chart ───────────────────���───────────────────────��────────────────────
 
 const IrmChart = ({ pool }: { pool: PoolView }) => {
-  const VW = 240, VH = 110;
-  const padL = 30, padB = 22, padT = 8, padR = 10;
+  const VW = 280, VH = 150;
+  const padL = 32, padB = 22, padT = 10, padR = 8;
   const cW = VW - padL - padR;
   const cH = VH - padT - padB;
 
@@ -270,8 +335,31 @@ const IrmChart = ({ pool }: { pool: PoolView }) => {
   const cy = Y(borrowRate(base, s1, s2, optUtil, currentUtil));
   const midRate = Math.round(maxY / 2);
 
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<{ u: number; x: number } | null>(null);
+
+  const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const svgX = ((e.clientX - rect.left) / rect.width) * VW;
+    const u = Math.max(0, Math.min(100, ((svgX - padL) / cW) * 100));
+    setHover({ u, x: svgX });
+  }, [cW]);
+
+  const hoverBorrow = hover ? borrowRate(base, s1, s2, optUtil, hover.u) : 0;
+  const hoverSupply = hover ? supplyRate(base, s1, s2, optUtil, rf, hover.u) : 0;
+
   return (
-    <svg viewBox={`0 0 ${VW} ${VH}`} width="100%" style={{ display: "block" }}>
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${VW} ${VH}`}
+      width="100%"
+      style={{ display: "block", cursor: "crosshair" }}
+      onMouseMove={onMove}
+      onMouseLeave={() => setHover(null)}
+    >
+      {/* Axes */}
       <line x1={padL} y1={padT} x2={padL} y2={padT + cH} stroke="#e7e7ec" strokeWidth="1" />
       <line x1={padL} y1={padT + cH} x2={VW - padR} y2={padT + cH} stroke="#e7e7ec" strokeWidth="1" />
       {[0, midRate, maxY].map((v) => (
@@ -283,11 +371,50 @@ const IrmChart = ({ pool }: { pool: PoolView }) => {
       <text x={padL} y={VH - 3} textAnchor="middle" fontSize="8" fill="#9ca3af">0%</text>
       <text x={kx} y={VH - 3} textAnchor="middle" fontSize="8" fill="#8b5cf6">{optUtil}%</text>
       <text x={VW - padR} y={VH - 3} textAnchor="end" fontSize="8" fill="#9ca3af">100%</text>
+
+      {/* Kink line */}
       <line x1={kx} y1={padT} x2={kx} y2={padT + cH} stroke="#c4b5fd" strokeWidth="1" strokeDasharray="3 2" />
+
+      {/* Curves */}
       <polyline points={sp} fill="none" stroke="#059669" strokeWidth="1.5" opacity="0.65" />
       <polyline points={bp} fill="none" stroke="#d97706" strokeWidth="2" />
+
+      {/* Current utilization */}
       <line x1={cx} y1={padT} x2={cx} y2={padT + cH} stroke="#6d28d9" strokeWidth="1" strokeDasharray="3 2" />
       <circle cx={cx} cy={cy} r="3.5" fill="#d97706" stroke="white" strokeWidth="1.5" />
+
+      {/* Hover crosshair + tooltip */}
+      {hover && hover.x >= padL && hover.x <= VW - padR && (
+        <g>
+          {/* Vertical line */}
+          <line x1={hover.x} y1={padT} x2={hover.x} y2={padT + cH} stroke="#9ca3af" strokeWidth="0.5" strokeDasharray="2 2" />
+          {/* Dots on curves */}
+          <circle cx={hover.x} cy={Y(hoverBorrow)} r="3" fill="#d97706" stroke="white" strokeWidth="1" />
+          <circle cx={hover.x} cy={Y(hoverSupply)} r="3" fill="#059669" stroke="white" strokeWidth="1" />
+          {/* Tooltip box */}
+          {(() => {
+            const tipW = 86, tipH = 42;
+            let tx = hover.x + 8;
+            if (tx + tipW > VW - 4) tx = hover.x - tipW - 8;
+            let ty = Math.max(padT, Y(hoverBorrow) - tipH / 2);
+            if (ty + tipH > padT + cH) ty = padT + cH - tipH;
+            return (
+              <g>
+                <rect x={tx} y={ty} width={tipW} height={tipH} rx="4" fill="#1f2937" fillOpacity="0.92" />
+                <text x={tx + 6} y={ty + 11} fontSize="7.5" fill="#9ca3af" fontFamily="var(--font-mono),monospace">
+                  Util: {hover.u.toFixed(0)}%
+                </text>
+                <text x={tx + 6} y={ty + 22} fontSize="7.5" fill="#d97706" fontWeight="600" fontFamily="var(--font-mono),monospace">
+                  Borrow: {hoverBorrow.toFixed(2)}%
+                </text>
+                <text x={tx + 6} y={ty + 33} fontSize="7.5" fill="#059669" fontWeight="600" fontFamily="var(--font-mono),monospace">
+                  Supply: {hoverSupply.toFixed(2)}%
+                </text>
+              </g>
+            );
+          })()}
+        </g>
+      )}
     </svg>
   );
 };
@@ -312,7 +439,7 @@ const PoolDetail = ({ pool, fhe, setModal, onClose, pythPrices }: { pool: PoolVi
   const availLiq = pool.totalDeposits - pool.totalBorrows;
 
   return (
-    <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden", position: "sticky", top: 82 }}>
+    <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
       {/* Header */}
       <div style={{ padding: "16px 18px 14px", borderBottom: "1px solid #f0f0f3", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -328,83 +455,89 @@ const PoolDetail = ({ pool, fhe, setModal, onClose, pythPrices }: { pool: PoolVi
         <button onClick={onClose} style={{ width: 26, height: 26, borderRadius: 999, border: "1px solid #e7e7ec", background: "#f4f4f6", cursor: "pointer", display: "grid", placeItems: "center", fontSize: 13, color: "#5b5b66", flexShrink: 0 }}>✕</button>
       </div>
 
-      {/* Rate summary */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid #f0f0f3" }}>
-        {[
-          { label: "Supply APY", value: `+${sApy.toFixed(1)}%`, color: "#059669", bg: "#f0fdf4" },
-          { label: "Borrow APY", value: `${bApy.toFixed(1)}%`, color: "#d97706", bg: "#fffbeb" },
-          { label: "Utilization", value: enc ? "––" : `${util.toFixed(0)}%`, color: utilColor, bg: "#fafafc" },
-        ].map((s, i) => (
-          <div key={i} style={{ padding: "14px 16px", background: s.bg, borderRight: i < 2 ? "1px solid #f0f0f3" : "none" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#9ca3af", marginBottom: 5 }}>{s.label}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: s.color, letterSpacing: "-0.02em" }}>{s.value}</div>
+      {/* Two-column: Graph left, All data right */}
+      <div className="detail-split">
+        {/* Left — IRM chart */}
+        <div className="detail-split-chart">
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#5b5b66", marginBottom: 6 }}>Interest Rate Model</div>
+          <div style={{ fontSize: 11, color: "#9ca3af", lineHeight: 1.5, marginBottom: 10 }}>
+            Two-slope kinked model. Rates rise gradually up to <strong style={{ color: "#5b5b66" }}>{optUtil}%</strong> utilization,
+            then spike steeply to discourage over-borrowing.
           </div>
-        ))}
-      </div>
+          <IrmChart pool={pool} />
+          <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10.5, color: "#d97706", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 2, background: "#d97706", display: "inline-block", borderRadius: 1 }} /> Borrow</span>
+            <span style={{ fontSize: 10.5, color: "#059669", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 12, height: 2, background: "#059669", display: "inline-block", borderRadius: 1, opacity: 0.65 }} /> Supply</span>
+            <span style={{ fontSize: 10.5, color: "#8b5cf6", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 2, background: "#8b5cf6", display: "inline-block", borderRadius: 1, opacity: 0.6 }} /> Kink</span>
+            <span style={{ fontSize: 10.5, color: "#6d28d9", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 5, height: 5, background: "#d97706", display: "inline-block", borderRadius: 99 }} /> Current</span>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            {[
+              { k: "Base", v: `${base}%`, hint: "Minimum borrow rate at 0% utilization" },
+              { k: "Slope₁", v: `${s1}%`, hint: "Rate increase per 1% util below kink" },
+              { k: "Kink", v: `${optUtil}%`, hint: "Optimal utilization — Slope₂ kicks in above this" },
+              { k: "Slope₂", v: `${s2}%`, hint: "Steep rate above kink to discourage over-borrowing" },
+            ].map((r, i) => (
+              <IrmParam key={i} k={r.k} v={r.v} hint={r.hint} />
+            ))}
+          </div>
+        </div>
 
-      {/* Liquidity */}
-      <div style={{ padding: "14px 18px", borderBottom: "1px solid #f0f0f3" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
-          <span style={{ color: "#5b5b66", fontWeight: 500 }}>Pool utilization</span>
-          <span style={{ fontWeight: 700, color: utilColor }}>{enc ? "––" : `${util.toFixed(0)}%`}</span>
-        </div>
-        <UtilBar pct={enc ? 0 : util} />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-          <div style={{ background: "#f9f9fb", borderRadius: 8, padding: "8px 10px", border: "1px solid #f0f0f3" }}>
-            <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Total supplied</div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>{enc ? <CipherVal seed={0} mask="$◉◉◉,◉◉◉" /> : formatBigAmount(pool.totalDeposits, pool.decimals)}</div>
-            {!enc && (() => { const usd = tokenToUsd(pool.totalDeposits, pool.decimals, pythPrices?.[pool.id]); return usd != null ? <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{formatUsd(usd)}</div> : null; })()}
+        {/* Right — All numeric data */}
+        <div className="detail-split-data">
+          {/* Rate summary */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            {[
+              { label: "Supply APY", value: `+${sApy.toFixed(1)}%`, color: "#059669", bg: "#f0fdf4" },
+              { label: "Borrow APY", value: `${bApy.toFixed(1)}%`, color: "#d97706", bg: "#fffbeb" },
+              { label: "Utilization", value: enc ? "––" : `${util.toFixed(0)}%`, color: utilColor, bg: "#fafafc" },
+            ].map((s, i) => (
+              <div key={i} style={{ padding: "10px 12px", background: s.bg, borderRadius: 10, border: "1px solid #f0f0f3" }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#9ca3af", marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: s.color, letterSpacing: "-0.02em" }}>{s.value}</div>
+              </div>
+            ))}
           </div>
-          <div style={{ background: "#f9f9fb", borderRadius: 8, padding: "8px 10px", border: "1px solid #f0f0f3" }}>
-            <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Available</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#059669" }}>{enc ? "••••" : formatBigAmount(availLiq > 0n ? availLiq : 0n, pool.decimals)}</div>
-            {!enc && (() => { const usd = tokenToUsd(availLiq > 0n ? availLiq : 0n, pool.decimals, pythPrices?.[pool.id]); return usd != null ? <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{formatUsd(usd)}</div> : null; })()}
-          </div>
-        </div>
-      </div>
 
-      {/* IRM */}
-      <div style={{ padding: "14px 18px", borderBottom: "1px solid #f0f0f3" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#5b5b66", marginBottom: 10 }}>Interest Rate Model</div>
-        <IrmChart pool={pool} />
-        <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
-          <span style={{ fontSize: 10.5, color: "#d97706", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 14, height: 2, background: "#d97706", display: "inline-block", borderRadius: 1 }} /> Borrow</span>
-          <span style={{ fontSize: 10.5, color: "#059669", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 14, height: 2, background: "#059669", display: "inline-block", borderRadius: 1, opacity: 0.65 }} /> Supply</span>
-          <span style={{ fontSize: 10.5, color: "#8b5cf6", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 2, background: "#8b5cf6", display: "inline-block", borderRadius: 1, opacity: 0.6 }} /> Kink</span>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-          {[{ k: "Base", v: `${base}%` }, { k: "Slope₁", v: `${s1}%` }, { k: "Kink", v: `${optUtil}%` }, { k: "Slope₂", v: `${s2}%` }].map((r, i) => (
-            <div key={i} style={{ background: "#f4f4f6", borderRadius: 6, padding: "3px 8px", fontSize: 11 }}>
-              <span style={{ color: "#9ca3af" }}>{r.k} </span>
-              <span style={{ fontWeight: 700, color: "#0b0b10" }}>{r.v}</span>
+          {/* Utilization bar + liquidity */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+              <span style={{ color: "#5b5b66", fontWeight: 500 }}>Pool utilization</span>
+              <span style={{ fontWeight: 700, color: utilColor }}>{enc ? "––" : `${util.toFixed(0)}%`}</span>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Risk params */}
-      <div style={{ padding: "14px 18px" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#5b5b66", marginBottom: 10 }}>Risk Parameters</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
-          {[
-            { k: "Max LTV", v: `${ltv}%` },
-            { k: "Liq. threshold", v: `${liqTh}%` },
-            { k: "Liq. bonus", v: `+${liqBonus}%` },
-            { k: "Reserve factor", v: `${rf}%` },
-          ].map((r, i) => (
-            <div key={i} style={{ background: "#f9f9fb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f0f0f3" }}>
-              <div style={{ fontSize: 10.5, color: "#5b5b66", fontWeight: 500, marginBottom: 4 }}>{r.k}</div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: "#0b0b10" }}>{r.v}</div>
+            <UtilBar pct={enc ? 0 : util} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+              <div style={{ background: "#f9f9fb", borderRadius: 8, padding: "8px 10px", border: "1px solid #f0f0f3" }}>
+                <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Total supplied</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{enc ? <CipherVal seed={0} mask="$◉◉◉,◉◉◉" /> : formatBigAmount(pool.totalDeposits, pool.decimals)}</div>
+                {!enc && (() => { const usd = tokenToUsd(pool.totalDeposits, pool.decimals, pythPrices?.[pool.id]); return usd != null ? <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{formatUsd(usd)}</div> : null; })()}
+              </div>
+              <div style={{ background: "#f9f9fb", borderRadius: 8, padding: "8px 10px", border: "1px solid #f0f0f3" }}>
+                <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>Available</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#059669" }}>{enc ? "••••" : formatBigAmount(availLiq > 0n ? availLiq : 0n, pool.decimals)}</div>
+                {!enc && (() => { const usd = tokenToUsd(availLiq > 0n ? availLiq : 0n, pool.decimals, pythPrices?.[pool.id]); return usd != null ? <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{formatUsd(usd)}</div> : null; })()}
+              </div>
             </div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-supply" style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 14, fontWeight: 700, background: type === "ika" ? "linear-gradient(135deg,#f97316,#eab308)" : undefined }} onClick={() => setModal({ type: type === "ika" ? "ika-setup" : "supply", pool })}>
-            {type === "ika" ? "Register dWallet" : "Supply"}
-          </button>
-          <button className="btn-borrow" style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 14, fontWeight: 700 }} onClick={() => setModal({ type: "borrow", pool })}>
-            Borrow
-          </button>
+          </div>
+
+          {/* Risk params */}
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#5b5b66", marginBottom: 8 }}>Risk Parameters</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+            <ParamCard label="Max LTV" value={`${ltv}%`} hint="Maximum Loan-to-Value ratio. You can borrow up to this % of your collateral value. Borrowing near max LTV puts you close to liquidation." />
+            <ParamCard label="Liq. threshold" value={`${liqTh}%`} hint="When your borrow value reaches this % of your collateral, your position becomes liquidatable. Always higher than LTV to give a safety buffer." />
+            <ParamCard label="Liq. bonus" value={`+${liqBonus}%`} hint="Discount liquidators receive on your collateral when liquidating. Incentivizes keeping the protocol solvent." />
+            <ParamCard label="Reserve factor" value={`${rf}%`} hint="% of borrow interest that goes to the protocol treasury. The rest goes to suppliers." />
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn-supply" style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 14, fontWeight: 700, background: type === "ika" ? "linear-gradient(135deg,#f97316,#eab308)" : undefined }} onClick={() => setModal({ type: type === "ika" ? "ika-setup" : "supply", pool })}>
+              {type === "ika" ? "Register dWallet" : "Supply"}
+            </button>
+            <button className="btn-borrow" style={{ flex: 1, padding: "10px", borderRadius: 12, fontSize: 14, fontWeight: 700 }} onClick={() => setModal({ type: "borrow", pool })}>
+              Borrow
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -419,7 +552,6 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
   const tabs: { id: View; label: string; icon: string }[] = [
     { id: "markets", label: "Markets", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
     { id: "portfolio", label: "Portfolio", icon: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
-    { id: "cross", label: "Cross", icon: "M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" },
     { id: "flash", label: "Flash", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
     { id: "liquidate", label: "Liquidate", icon: "M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.75-2.96L13.76 4a2 2 0 00-3.5 0L3.3 16.04A2 2 0 005.07 19z" },
     { id: "history", label: "History", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
@@ -477,7 +609,6 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
 const MOBILE_TABS: { id: View; label: string; icon: string }[] = [
   { id: "markets", label: "Markets", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
   { id: "portfolio", label: "Portfolio", icon: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
-  { id: "cross", label: "Cross", icon: "M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" },
   { id: "flash", label: "Flash", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
   { id: "liquidate", label: "Liquidate", icon: "M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.75-2.96L13.76 4a2 2 0 00-3.5 0L3.3 16.04A2 2 0 005.07 19z" },
   { id: "history", label: "History", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
@@ -506,7 +637,7 @@ const MarketsView = ({ fhe, setModal, pools, poolsLoading, poolsError, refreshPo
 
   const totalSupplyUsd = pools.reduce((s, p) => s + (tokenToUsd(p.totalDeposits, p.decimals, pythPrices[p.id]) ?? 0), 0);
   const totalBorrowUsd = pools.reduce((s, p) => s + (tokenToUsd(p.totalBorrows, p.decimals, pythPrices[p.id]) ?? 0), 0);
-  const hasUsdPrices = Object.keys(pythPrices).length > 1; // more than just usdc fallback
+  const hasUsdPrices = Object.keys(pythPrices).length > 1;
 
   return (
     <div className="fade-rise">
@@ -520,7 +651,7 @@ const MarketsView = ({ fhe, setModal, pools, poolsLoading, poolsError, refreshPo
       </div>
 
       {/* Pool list + detail */}
-      <div className="split-layout">
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontSize: 14, fontWeight: 700 }}>Lending Pools</div>
@@ -681,8 +812,7 @@ const PoolPickerButton = ({ pools, modalType, setModal, label, className, style 
 
 // ─── Portfolio View ───────────────────────────────────────────────────────────
 
-const posColGrid: CSSProperties = { display: "grid", gridTemplateColumns: "2fr 1.3fr 0.85fr 1.3fr 0.7fr 0.7fr 148px", alignItems: "center" };
-const posChunkGrid: CSSProperties = { display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1.2fr 1.3fr 80px", gap: 10 };
+// Position grids use CSS classes for responsive column hiding
 
 const timeAgo = (dateStr: string): string => {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -753,6 +883,8 @@ interface PortfolioRowProps {
 }
 
 const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, isLast, pythPrices }: PortfolioRowProps) => {
+  const { publicKey } = useWallet();
+  const { connection } = useConnection();
   const { pos, pool, side, amount, interest, apy, txs } = row;
   const sym = pool.symbol;
   const dec = pos.decimals;
@@ -769,7 +901,8 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
       {/* Summary row */}
       <div
         onClick={onToggle}
-        style={{ ...posColGrid, padding: "12px 18px", cursor: "pointer", transition: "background .1s" }}
+        className="pos-row-grid"
+        style={{ padding: "12px 18px", cursor: "pointer", transition: "background .1s" }}
         onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(109,40,217,.03)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
       >
@@ -826,15 +959,72 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 5, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-          <button
-            className={isSupply ? "btn-borrow" : "btn-supply"}
-            style={{ fontSize: 11, padding: "4px 10px" }}
-            onClick={() => setModal({ type: isSupply ? "withdraw" : "repay", pool })}
-          >
-            {isSupply ? "Withdraw" : "Repay"}
-          </button>
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <button
+              className={isSupply ? "btn-borrow" : "btn-supply"}
+              disabled={!pos.on_chain}
+              title={pos.on_chain ? undefined : "Position not found on-chain"}
+              style={{ fontSize: 11, padding: "4px 10px", opacity: pos.on_chain ? 1 : 0.4, cursor: pos.on_chain ? "pointer" : "not-allowed" }}
+              onClick={async () => {
+                if (!pos.on_chain) return;
+                if (isSupply) {
+                  // ── WITHDRAW ──
+                  const depositTokens = BigInt(amount); // current value (principal + interest)
+                  const available = pool.totalDeposits - pool.totalBorrows - pool.accumulatedFees;
+                  let maxTokens = depositTokens < available ? depositTokens : available;
+
+                  const debt = BigInt(pos.borrow_debt || "0");
+                  if (debt > 0n) {
+                    const liqThreshold = pool.liquidationThresholdWad ?? (WAD * 80n / 100n);
+                    const minCollateral = (debt * WAD * 101n) / (liqThreshold * 100n);
+                    const withdrawable = depositTokens > minCollateral ? depositTokens - minCollateral : 0n;
+                    if (withdrawable < maxTokens) maxTokens = withdrawable;
+                  }
+
+                  const totalShares = BigInt(pos.deposit_shares || "0");
+                  const maxSharesVal = depositTokens > 0n
+                    ? (totalShares * maxTokens) / depositTokens
+                    : 0n;
+
+                  setModal({
+                    type: "withdraw", pool,
+                    maxAmount: maxTokens.toString(),
+                    maxShares: maxSharesVal.toString(),
+                    principal: pos.original_deposit || "0",
+                    interest: pos.interest_earned || "0",
+                  });
+                } else {
+                  // ── REPAY ──
+                  const debt = BigInt(amount);
+                  let walletBalance = debt;
+                  if (publicKey) {
+                    try {
+                      const ata = getAssociatedTokenAddressSync(pool.tokenMint, publicKey, false, TOKEN_PROGRAM_ID);
+                      const bal = await connection.getTokenAccountBalance(ata);
+                      walletBalance = BigInt(bal.value.amount);
+                    } catch {
+                      try {
+                        const lamports = await connection.getBalance(publicKey);
+                        walletBalance = BigInt(lamports);
+                      } catch { /* ignore */ }
+                    }
+                  }
+                  const repayMax = debt < walletBalance ? debt : walletBalance;
+                  setModal({
+                    type: "repay", pool,
+                    maxAmount: repayMax.toString(),
+                    principal: pos.borrow_principal,
+                    interest: pos.interest_owed,
+                    walletBalance: walletBalance.toString(),
+                  });
+                }
+              }}
+            >
+              {isSupply ? "Withdraw" : "Repay"}
+            </button>
+          </div>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#b0b0b8" strokeWidth="2" strokeLinecap="round" style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .2s", flexShrink: 0, cursor: "pointer" }}>
             <path d="M4 6l4 4 4-4" />
           </svg>
         </div>
@@ -872,7 +1062,7 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
             </div>
           ) : (
             <div style={{ background: "white", border: "1px solid #f0f0f3", borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ ...posChunkGrid, padding: "10px 14px", borderBottom: "1px solid #f0f0f3", background: "#fafafc" }}>
+              <div className="pos-chunk-grid" style={{ padding: "10px 14px", borderBottom: "1px solid #f0f0f3", background: "#fafafc" }}>
                 {["Transaction", "Action", "Amount", "Timestamp", ""].map((h, i) => (
                   <span key={i} style={{ fontSize: 10.5, color: "#9ca3af", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>{h}</span>
                 ))}
@@ -882,7 +1072,7 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
                 const actionColor: Record<string, string> = { deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a" };
 
                 return (
-                  <div key={tx.signature} style={{ ...posChunkGrid, padding: "11px 14px", alignItems: "center", borderBottom: i < txs.length - 1 ? "1px solid #f7f7f9" : "none", fontSize: 13 }}>
+                  <div key={tx.signature} className="pos-chunk-grid" style={{ padding: "11px 14px", alignItems: "center", borderBottom: i < txs.length - 1 ? "1px solid #f7f7f9" : "none", fontSize: 13 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <a href={explorerUrl(tx.signature)} target="_blank" rel="noreferrer" style={{ fontFamily: "var(--font-mono),monospace", fontSize: 12, color: "#6d28d9", fontWeight: 500, textDecoration: "none" }}>
                         {tx.signature.slice(0, 6)}…{tx.signature.slice(-5)}
@@ -922,54 +1112,8 @@ const PortfolioSummary = ({ positions, pools, setModal, pythPrices }: { position
     });
   const totalCollateralUsd = collaterals.reduce((s, c) => s + (c.usd ?? 0), 0);
 
-  const totalBorrowPools = positions.filter((p) => p.borrow_debt !== "0").length;
-
-  const minHf = positions.reduce((min, p) => {
-    if (!p.health_factor_wad || p.borrow_debt === "0") return min;
-    const hf = formatHF(p.health_factor_wad);
-    const val = parseFloat(hf.label);
-
-    return isNaN(val) ? min : Math.min(min, val);
-  }, 999);
-
-  const borrowCapUsed = minHf < 999 ? Math.max(0, Math.min(100, Math.round((1 / minHf) * 100))) : 0;
-  const barColor = borrowCapUsed > 80 ? "#dc2626" : borrowCapUsed > 60 ? "#d97706" : "linear-gradient(90deg,#059669,#10b981)";
-
   return (
-    <div style={{ position: "sticky", top: 82, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
-        <div style={{ padding: "16px 18px 12px", borderBottom: "1px solid #f0f0f3" }}>
-          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#5b5b66", marginBottom: 2 }}>Position Summary</div>
-        </div>
-
-        {[
-          { label: "Active pools", value: `${positions.length}`, color: "#0b0b10" },
-          { label: "Supply positions", value: `${collaterals.length}`, color: "#059669" },
-          { label: "Borrow positions", value: `${totalBorrowPools}`, color: totalBorrowPools > 0 ? "#dc2626" : "#0b0b10" },
-          { label: "Min health factor", value: minHf < 999 ? minHf.toFixed(2) : "∞", color: minHf < 1.2 ? "#dc2626" : minHf < 1.5 ? "#d97706" : "#059669" },
-        ].map((m, i) => (
-          <div key={i} style={{ padding: "13px 18px", borderBottom: i < 3 ? "1px solid #f7f7f9" : "none" }}>
-            <div style={{ fontSize: 11.5, color: "#5b5b66", fontWeight: 500, marginBottom: 5 }}>{m.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", color: m.color }}>{m.value}</div>
-          </div>
-        ))}
-
-        {totalBorrowPools > 0 && (
-          <div style={{ padding: "12px 18px 16px", borderTop: "1px solid #f0f0f3" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
-              <span style={{ color: "#5b5b66", fontWeight: 500 }}>Borrow capacity used</span>
-              <span style={{ fontWeight: 700, color: borrowCapUsed > 80 ? "#dc2626" : borrowCapUsed > 60 ? "#d97706" : "#059669" }}>{borrowCapUsed}%</span>
-            </div>
-            <div style={{ height: 6, background: "#f0f0f3", borderRadius: 3, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${borrowCapUsed}%`, borderRadius: 3, background: barColor, transition: "width .6s" }} />
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-              <span>0%</span><span>Liquidation at 100%</span>
-            </div>
-          </div>
-        )}
-      </div>
-
+    <div className="portfolio-sidebar">
       <div className="glass-card" style={{ borderRadius: 18, padding: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#5b5b66" }}>Your Collateral</div>
@@ -1016,6 +1160,7 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState<PortfolioFilter>("all");
 
+  // Initial load from DB (has tx history, APYs, etc.)
   useEffect(() => {
     if (!publicKey) { setDetailPositions([]); return; }
     setLoading(true);
@@ -1026,6 +1171,40 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, [publicKey, refreshKey]);
+
+  // Poll on-chain accounts every 10s for fresh balances & HF (chain is source of truth)
+  const chainPoolAddrs = React.useMemo(
+    () => detailPositions.map((p) => p.pool_address),
+    [detailPositions],
+  );
+  const chainUpdates = useChainPolling(rpc.endpoint, publicKey ?? null, chainPoolAddrs);
+
+  // Merge on-chain data into DB positions — chain wins for financial fields
+  const livePositions = React.useMemo(() => {
+    if (chainUpdates.length === 0) return detailPositions;
+    const chainMap = new Map(chainUpdates.map((u) => [u.pool_address, u]));
+    return detailPositions.map((pos) => {
+      const fresh = chainMap.get(pos.pool_address);
+      if (!fresh) return pos;
+      const origDeposit = BigInt(pos.original_deposit || "0");
+      const freshDepTokens = BigInt(fresh.deposit_tokens);
+      const interestEarned = freshDepTokens > origDeposit ? (freshDepTokens - origDeposit).toString() : "0";
+      const freshDebt = BigInt(fresh.borrow_debt);
+      const freshPrincipal = BigInt(fresh.borrow_principal);
+      const interestOwed = freshDebt > freshPrincipal ? (freshDebt - freshPrincipal).toString() : "0";
+      return {
+        ...pos,
+        deposit_shares: fresh.deposit_shares,
+        deposit_tokens: fresh.deposit_tokens,
+        borrow_principal: fresh.borrow_principal,
+        borrow_debt: fresh.borrow_debt,
+        health_factor_wad: fresh.health_factor_wad,
+        interest_earned: interestEarned,
+        interest_owed: interestOwed,
+        on_chain: true,
+      };
+    });
+  }, [detailPositions, chainUpdates]);
 
   if (!connected) {
     return (
@@ -1041,12 +1220,12 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
 
   const explorerUrl = (sig: string) => buildExplorerTxUrl(sig, rpc);
   const poolMap = new Map(pools.map((p) => [p.poolAddress.toBase58(), p]));
-  const rows = toVirtualRows(detailPositions, poolMap);
+  const rows = toVirtualRows(livePositions, poolMap);
   const visible = rows.filter((r) => filter === "all" || r.side === filter);
 
   const totalSupplyCount = rows.filter((r) => r.side === "supply").length;
   const totalBorrowCount = rows.filter((r) => r.side === "borrow").length;
-  const overallHf = detailPositions.reduce((min, p) => {
+  const overallHf = livePositions.reduce((min, p) => {
     if (!p.health_factor_wad || p.borrow_debt === "0") return min;
     const hf = formatHF(p.health_factor_wad);
     const val = parseFloat(hf.label);
@@ -1071,7 +1250,7 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
     );
   }
 
-  if (detailPositions.length === 0) {
+  if (livePositions.length === 0) {
     return (
       <div className="fade-rise empty-state" style={{ marginTop: 60 }}>
         <div className="empty-state-title">No positions yet</div>
@@ -1097,7 +1276,7 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
       </div>
 
       {/* Two-column layout */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
+      <div className="portfolio-layout">
         {/* Left: positions table */}
         <div>
           <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
@@ -1106,8 +1285,8 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
               <span style={{ fontSize: 11.5, color: "#9ca3af" }}>Click any row for transaction history</span>
             </div>
 
-            <div style={{ ...posColGrid, padding: "10px 18px", marginTop: 10, borderBottom: "1px solid #f0f0f3" }}>
-              {["Asset", "Total position", "APY", "Interest", "LTV", "Health", ""].map((h, i) => (
+            <div className="pos-row-grid" style={{ padding: "10px 18px", marginTop: 10, borderBottom: "1px solid #f0f0f3" }}>
+              {["Asset", "Total position", "APY", "Interest", "LTV", "Health", "Actions"].map((h, i) => (
                 <span key={i} style={{ fontSize: 11, color: "#5b5b66", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{h}</span>
               ))}
             </div>
@@ -1145,179 +1324,13 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
         </div>
 
         {/* Right: sticky position summary */}
-        <PortfolioSummary positions={detailPositions} pools={pools} setModal={setModal} pythPrices={pythPrices} />
+        <PortfolioSummary positions={livePositions} pools={pools} setModal={setModal} pythPrices={pythPrices} />
       </div>
     </div>
   );
 };
 
 // ─── Cross-Collateral Borrow View ───────────────────────────────────────────
-
-const CrossBorrowView = ({ connected, pools, pythPrices }: { connected: boolean; pools: PoolView[]; pythPrices: PythPrices }) => {
-  const [collIdx, setCollIdx] = useState(0);
-  const [borrowIdx, setBorrowIdx] = useState(pools.length > 1 ? 1 : 0);
-  const [amount, setAmount] = useState("");
-  const [inputMode, setInputMode] = useState<"token" | "usd">("token");
-  const { crossBorrow, status } = useVeilActions();
-
-  const collPool = pools[collIdx];
-  const borrowPool = pools[borrowIdx];
-  const collSymbol = collPool?.symbol ?? "unknown";
-  const borrowSymbol = borrowPool?.symbol ?? "unknown";
-  const collPrice = collPool ? pythPrices[collSymbol.toLowerCase()] ?? null : null;
-  const borrowPrice = borrowPool ? pythPrices[borrowSymbol.toLowerCase()] ?? null : null;
-
-  const parsed = parseFloat(amount);
-  const validInput = !isNaN(parsed) && parsed > 0;
-  const borrowDecimals = borrowPool ? Number(borrowPool.decimals) : 9;
-
-  const tokenAmount = inputMode === "token"
-    ? (validInput ? parsed : 0)
-    : (validInput && borrowPrice ? parsed / borrowPrice : 0);
-  const usdAmount = inputMode === "usd"
-    ? (validInput ? parsed : 0)
-    : (validInput && borrowPrice ? parsed * borrowPrice : 0);
-
-  const collDeposit = collPool ? Number(collPool.totalDeposits) / 10 ** Number(collPool.decimals) : 0;
-  const collUsd = collPrice ? collDeposit * collPrice : 0;
-
-  const handleBorrow = async () => {
-    if (!connected || !borrowPool || !collPool || tokenAmount <= 0) return;
-    const raw = BigInt(Math.floor(tokenAmount * 10 ** borrowDecimals));
-    await crossBorrow(borrowPool, [collPool], raw);
-    setAmount("");
-  };
-
-  const sty = {
-    card: { borderRadius: 20, border: "1px solid #e7e7ec", background: "white", padding: 24, marginBottom: 16 } as CSSProperties,
-    label: { fontSize: 12, fontWeight: 600, color: "#71717a", textTransform: "uppercase" as const, letterSpacing: "0.08em", marginBottom: 8 },
-    select: { width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid #e7e7ec", fontSize: 14, fontWeight: 500, background: "#fafafa", appearance: "none" as const, cursor: "pointer" },
-    input: { width: "100%", padding: "10px 14px", borderRadius: 12, border: "1px solid #e7e7ec", fontSize: 16, fontWeight: 500, fontFamily: "var(--font-mono, monospace)" },
-    btn: { width: "100%", padding: "14px 0", borderRadius: 14, border: "none", fontSize: 15, fontWeight: 700, cursor: "pointer", color: "#fff", background: "linear-gradient(135deg,#6d28d9,#db2777)", opacity: validInput && connected ? 1 : 0.4 } as CSSProperties,
-    badge: { display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 600 } as CSSProperties,
-  };
-
-  return (
-    <div style={{ maxWidth: 520, margin: "0 auto", padding: "24px 0" }}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", color: "#0b0b10" }}>Cross-Collateral Borrow</div>
-        <div style={{ fontSize: 14, color: "#71717a", marginTop: 4 }}>Deposit one asset, borrow another — Aave-style.</div>
-      </div>
-
-      {!connected ? (
-        <div style={{ ...sty.card, textAlign: "center", color: "#71717a", fontSize: 14 }}>
-          Connect your wallet to use cross-collateral borrowing.
-        </div>
-      ) : pools.length < 2 ? (
-        <div style={{ ...sty.card, textAlign: "center", color: "#71717a", fontSize: 14 }}>
-          Need at least 2 pools for cross-collateral borrowing.
-        </div>
-      ) : (
-        <>
-          {/* Collateral pool */}
-          <div style={sty.card}>
-            <div style={sty.label}>Collateral pool</div>
-            <select value={collIdx} onChange={(e) => setCollIdx(Number(e.target.value))} style={sty.select}>
-              {pools.map((p, i) => (
-                <option key={p.poolAddress.toBase58()} value={i}>
-                  {getPoolIcon(p.symbol)} {p.symbol} — {shortAddr(p.poolAddress.toBase58())}
-                </option>
-              ))}
-            </select>
-            {collPool && (
-              <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <span style={{ ...sty.badge, background: "#ecfdf5", color: "#065f46" }}>
-                  Deposits: {formatTokenAmount(collPool.totalDeposits, collPool.decimals, collSymbol)}
-                </span>
-                {collPrice && (
-                  <span style={{ ...sty.badge, background: "#ede9fe", color: "#4c1d95" }}>
-                    ≈ {formatUsd(collUsd)}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Arrow */}
-          <div style={{ textAlign: "center", margin: "-8px 0", position: "relative", zIndex: 1 }}>
-            <span style={{ display: "inline-grid", placeItems: "center", width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg,#6d28d9,#db2777)", color: "white" }}>
-              <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M10 3v14M5 12l5 5 5-5" /></svg>
-            </span>
-          </div>
-
-          {/* Borrow pool */}
-          <div style={sty.card}>
-            <div style={sty.label}>Borrow pool</div>
-            <select value={borrowIdx} onChange={(e) => setBorrowIdx(Number(e.target.value))} style={sty.select}>
-              {pools.map((p, i) => (
-                <option key={p.poolAddress.toBase58()} value={i} disabled={i === collIdx}>
-                  {getPoolIcon(p.symbol)} {p.symbol} — {shortAddr(p.poolAddress.toBase58())}
-                </option>
-              ))}
-            </select>
-
-            <div style={{ marginTop: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#71717a" }}>
-                  {inputMode === "token" ? "Amount" : "USD Amount"}
-                </span>
-                <button
-                  onClick={() => setInputMode((m) => (m === "token" ? "usd" : "token"))}
-                  style={{ fontSize: 11, fontWeight: 600, color: "#6d28d9", background: "#ede9fe", border: "none", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}
-                >
-                  ⇄ {inputMode === "token" ? "USD" : borrowSymbol}
-                </button>
-              </div>
-              <input
-                type="number"
-                placeholder={inputMode === "token" ? `0.00 ${borrowSymbol}` : "$0.00"}
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                style={sty.input}
-              />
-              {validInput && borrowPrice && (
-                <div style={{ fontSize: 12, color: "#71717a", marginTop: 4, fontFamily: "var(--font-mono, monospace)" }}>
-                  {inputMode === "token"
-                    ? `≈ ${formatUsd(usdAmount)}`
-                    : `≈ ${tokenAmount.toFixed(borrowDecimals > 6 ? 6 : borrowDecimals)} ${borrowSymbol}`}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Summary */}
-          {validInput && collPrice && borrowPrice && (
-            <div style={{ ...sty.card, background: "#fafafa" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46", marginBottom: 6 }}>
-                <span>Collateral value</span>
-                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600 }}>{formatUsd(collUsd)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46", marginBottom: 6 }}>
-                <span>Borrow value</span>
-                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600 }}>{formatUsd(usdAmount)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#3f3f46" }}>
-                <span>Est. global HF</span>
-                <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600, color: (collUsd * 0.8) / usdAmount >= 1 ? "#059669" : "#dc2626" }}>
-                  {((collUsd * 0.8) / usdAmount).toFixed(2)}×
-                </span>
-              </div>
-            </div>
-          )}
-
-          <button onClick={handleBorrow} disabled={!validInput || !connected || status === "signing" || status === "confirming" || collIdx === borrowIdx} style={sty.btn}>
-            {status === "signing" ? "Signing…" : status === "confirming" ? "Confirming…" : "Cross Borrow"}
-          </button>
-          {collIdx === borrowIdx && (
-            <div style={{ textAlign: "center", fontSize: 12, color: "#dc2626", marginTop: 6 }}>
-              Collateral and borrow pools must be different.
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
 
 // ─── Flash Loans View ─────────────────────────────────────────────────────────
 
@@ -1621,20 +1634,87 @@ const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; p
 
 // ─── History View ───────��───────────────────────────���─────────────────────────
 
+const HISTORY_ACTION_COLOR: Record<string, string> = {
+  deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a",
+  liquidate: "#dc2626", flash: "#d97706", flash_borrow: "#6d28d9", flash_repay: "#059669",
+  init: "#0b0b10", update_pool: "#6b7280", pause: "#dc2626", resume: "#059669",
+  collect_fees: "#a16207", update_oracle: "#0891b2",
+};
+
+const formatTxAmount = (raw: string | null, pool: PoolView | undefined): string => {
+  if (!raw) return "—";
+  try {
+    const v = BigInt(raw);
+    if (v === 0n) return "—";
+    const decimals = pool?.decimals ?? 9;
+    const symbol = pool?.symbol ?? "";
+    return `${formatBigAmount(v, decimals)}${symbol ? ` ${symbol}` : ""}`;
+  } catch {
+    return raw;
+  }
+};
+
+const HISTORY_PAGE_SIZE = 25;
+const HISTORY_INITIAL_CAP = 200;
+
+const HISTORY_ACTIONS = [
+  "deposit", "withdraw", "borrow", "repay", "liquidate",
+  "flash", "flash_borrow", "flash_repay",
+  "init", "update_pool", "pause", "resume",
+  "collect_fees", "update_oracle",
+] as const;
+
 const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView[] }) => {
   const { publicKey } = useWallet();
   const [txs, setTxs] = useState<TxLogEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [capped, setCapped] = useState(false);
+  const [fetchAll, setFetchAll] = useState(false);
   const rpc = useSolanaRpc();
 
-  useEffect(() => {
-    if (!publicKey) { setTxs([]); setLoading(false); return; }
-    fetch(`/api/transactions?wallet=${encodeURIComponent(publicKey.toBase58())}`, { cache: "no-store" })
+  // Filters
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [actionFilter, setActionFilter] = useState("");
+  const [poolFilter, setPoolFilter] = useState("");
+
+  const pageSize = fetchAll ? HISTORY_INITIAL_CAP : HISTORY_PAGE_SIZE;
+
+  const fetchTxs = useCallback((pg: number, from: string, to: string, action: string, pool: string, all: boolean) => {
+    if (!publicKey) { setTxs([]); setTotal(0); setLoading(false); return; }
+    setLoading(true); setError(null);
+    const ps = pageSize;
+    const params = new URLSearchParams({
+      wallet: publicKey.toBase58(),
+      limit: String(ps),
+      offset: String(pg * ps),
+    });
+    if (all) params.set("all", "true");
+    if (from) params.set("from", new Date(from).toISOString());
+    if (to) {
+      const end = new Date(to);
+      end.setHours(23, 59, 59, 999);
+      params.set("to", end.toISOString());
+    }
+    if (action) params.set("action", action);
+    if (pool) params.set("pool", pool);
+    fetch(`/api/transactions?${params}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((d) => setTxs(d.transactions ?? d ?? []))
-      .catch(() => setTxs([]))
+      .then((d) => { setTxs(d.transactions ?? []); setTotal(d.total ?? 0); setCapped(d.capped ?? false); })
+      .catch((e) => { setTxs([]); setTotal(0); setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => setLoading(false));
-  }, [publicKey]);
+  }, [publicKey, pageSize]);
+
+  useEffect(() => { fetchTxs(page, fromDate, toDate, actionFilter, poolFilter, fetchAll); }, [fetchTxs, page, fromDate, toDate, actionFilter, poolFilter, fetchAll]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const clearFilters = () => { setFromDate(""); setToDate(""); setActionFilter(""); setPoolFilter(""); setPage(0); setFetchAll(false); };
+
+  const handleLoadAll = () => { setFetchAll(true); setPage(0); };
 
   if (!connected) return (
     <div className="fade-rise empty-state" style={{ marginTop: 60 }}>
@@ -1643,71 +1723,214 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
     </div>
   );
 
-  const actionColor: Record<string, string> = { deposit: "#059669", withdraw: "#d97706", borrow: "#6d28d9", repay: "#2563eb", liquidate: "#dc2626", flash_borrow: "#6d28d9", flash_repay: "#059669", init: "#5b5b66" };
-
   return (
     <div className="fade-rise">
-      <div style={{ marginBottom: 16 }}>
-        <div className="section-header">Transaction History</div>
-        <div className="section-sub">Your recent protocol interactions</div>
+      <div style={{ marginBottom: 16, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="section-header">Transaction History</div>
+          <div className="section-sub">{total > 0 ? `${total} transaction${total === 1 ? "" : "s"}` : "Your recent protocol interactions"}</div>
+        </div>
+
+        {/* Filters */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={actionFilter}
+            onChange={(e) => { setActionFilter(e.target.value); setPage(0); }}
+            style={{ ...dateInput, cursor: "pointer", minWidth: 90 }}
+          >
+            <option value="">All actions</option>
+            {HISTORY_ACTIONS.map((a) => (
+              <option key={a} value={a}>{a.replace(/_/g, " ")}</option>
+            ))}
+          </select>
+          {pools.length > 0 && (
+            <select
+              value={poolFilter}
+              onChange={(e) => { setPoolFilter(e.target.value); setPage(0); }}
+              style={{ ...dateInput, cursor: "pointer", minWidth: 80 }}
+            >
+              <option value="">All pools</option>
+              {pools.map((p) => (
+                <option key={p.poolAddress.toBase58()} value={p.poolAddress.toBase58()}>{p.symbol}</option>
+              ))}
+            </select>
+          )}
+          <label style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>FROM</label>
+          <input
+            type="date" value={fromDate}
+            onChange={(e) => { setFromDate(e.target.value); setPage(0); }}
+            style={dateInput}
+          />
+          <label style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>TO</label>
+          <input
+            type="date" value={toDate}
+            onChange={(e) => { setToDate(e.target.value); setPage(0); }}
+            style={dateInput}
+          />
+          {(fromDate || toDate || actionFilter || poolFilter) && (
+            <button onClick={clearFilters} style={{ fontSize: 11, color: "#6b7280", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontWeight: 600 }}>Clear</button>
+          )}
+        </div>
       </div>
 
       <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
         {loading ? (
           <div style={{ padding: "48px 18px", textAlign: "center", color: "#6b7280", fontSize: 14 }}>Loading…</div>
+        ) : error ? (
+          <div style={{ padding: "24px 18px", textAlign: "center" }}>
+            <div style={{ color: "#dc2626", marginBottom: 4, fontSize: 13 }}>Error: {error}</div>
+          </div>
         ) : txs.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-title">No transactions</div>
-            <div className="empty-state-desc">Your transaction history will appear here.</div>
+            <div className="empty-state-title">No transactions{fromDate || toDate ? " in this range" : " yet"}</div>
+            <div className="empty-state-desc">
+              {fromDate || toDate ? "Try adjusting the date range." : "Transactions sent from this dApp are logged here automatically."}
+            </div>
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="pool-table">
-              <thead>
-                <tr>
-                  <th>Action</th>
-                  <th>Pool</th>
-                  <th>Signature</th>
-                  <th>Status</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {txs.slice(0, 50).map((tx, i) => {
-                  const pool = pools.find((p) => p.poolAddress.toBase58() === tx.pool_address);
-                  return (
-                    <tr key={i} style={{ cursor: "default" }}>
-                      <td>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: actionColor[tx.action] ?? "#5b5b66", background: (actionColor[tx.action] ?? "#5b5b66") + "14", padding: "3px 10px", borderRadius: 999, textTransform: "capitalize" }}>{tx.action.replace("_", " ")}</span>
-                      </td>
-                      <td>
-                        {pool ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <AssetIcon pool={pool} size={22} />
-                            <span style={{ fontWeight: 500, fontSize: 13 }}>{pool.symbol}</span>
-                          </div>
-                        ) : (
-                          <span style={{ fontSize: 12, color: "#9ca3af", fontFamily: "var(--font-mono),monospace" }}>{tx.pool_address ? shortAddr(tx.pool_address) : "—"}</span>
-                        )}
-                      </td>
-                      <td>
-                        <a href={buildExplorerTxUrl(tx.signature, rpc)} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontFamily: "var(--font-mono),monospace", color: "#6d28d9", textDecoration: "none" }}>{shortAddr(tx.signature)}</a>
-                      </td>
-                      <td>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: tx.status === "confirmed" ? "#059669" : tx.status === "failed" ? "#dc2626" : "#d97706", background: tx.status === "confirmed" ? "#ecfdf5" : tx.status === "failed" ? "#fef2f2" : "#fffbeb", padding: "2px 8px", borderRadius: 999 }}>{tx.status}</span>
-                      </td>
-                      <td><span style={{ fontSize: 12, color: "#5b5b66" }}>{new Date(tx.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div style={{ overflowX: "auto" }}>
+              <table className="pool-table history-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Pool</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                    <th>Transaction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {txs.map((tx) => {
+                    const pool = pools.find((p) => p.poolAddress.toBase58() === tx.pool_address);
+                    const ac = HISTORY_ACTION_COLOR[tx.action] ?? "#5b5b66";
+                    const statusColor = tx.status === "confirmed" ? "#059669" : tx.status === "failed" ? "#dc2626" : "#d97706";
+                    const statusBg = tx.status === "confirmed" ? "#ecfdf5" : tx.status === "failed" ? "#fef2f2" : "#fffbeb";
+
+                    return (
+                      <tr key={tx.signature ?? tx.id} style={{ cursor: "default" }}>
+                        <td>
+                          <span style={{ fontSize: 12, color: "#9ca3af" }}>
+                            {new Date(tx.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: ac, background: ac + "14", padding: "3px 10px", borderRadius: 999, textTransform: "capitalize", whiteSpace: "nowrap" }}>
+                            {tx.action.replace(/_/g, " ")}
+                          </span>
+                        </td>
+                        <td>
+                          {pool ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <AssetIcon pool={pool} size={22} />
+                              <span style={{ fontWeight: 600, fontSize: 13 }}>{pool.symbol}</span>
+                            </div>
+                          ) : tx.pool_address ? (
+                            <a
+                              href={`https://explorer.solana.com/address/${tx.pool_address}${rpc.preset === "devnet" ? "?cluster=devnet" : rpc.preset === "mainnet" ? "" : `?cluster=custom&customUrl=${encodeURIComponent(rpc.endpoint)}`}`}
+                              target="_blank" rel="noreferrer"
+                              style={{ fontSize: 12, color: "#6d28d9", fontFamily: "var(--font-mono),monospace", textDecoration: "none" }}
+                            >
+                              {shortAddr(tx.pool_address)} ↗
+                            </a>
+                          ) : (
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
+                          )}
+                        </td>
+                        <td>
+                          <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono),monospace" }}>
+                            {formatTxAmount(tx.amount, pool)}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: statusColor, background: statusBg, padding: "2px 8px", borderRadius: 999 }}>
+                            {tx.status}
+                          </span>
+                          {tx.error_msg && (
+                            <div style={{ fontSize: 10, color: "#dc2626", marginTop: 2, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tx.error_msg}>
+                              {tx.error_msg}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <a href={buildExplorerTxUrl(tx.signature, rpc)} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontFamily: "var(--font-mono),monospace", color: "#6d28d9", textDecoration: "none" }}>
+                            {tx.signature.slice(0, 8)}…{tx.signature.slice(-4)} ↗
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Capped banner — offer to load all */}
+            {capped && !fetchAll && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 18px", borderTop: "1px solid #f0f0f3", background: "#fffbeb" }}>
+                <span style={{ fontSize: 12, color: "#92400e" }}>
+                  Showing first {txs.length} of {total} transactions
+                </span>
+                <button
+                  onClick={handleLoadAll}
+                  style={{ fontSize: 12, fontWeight: 600, padding: "5px 14px", borderRadius: 8, border: "1px solid #fbbf24", background: "#fef3c7", color: "#92400e", cursor: "pointer" }}
+                >Load all ({total})</button>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderTop: "1px solid #f0f0f3" }}>
+                <span style={{ fontSize: 12, color: "#9ca3af" }}>
+                  {page * pageSize + 1}–{Math.min((page + 1) * pageSize, total)} of {total}
+                </span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    disabled={page === 0}
+                    onClick={() => setPage(0)}
+                    style={pgBtn(page === 0)}
+                    title="First page"
+                  >««</button>
+                  <button
+                    disabled={page === 0}
+                    onClick={() => setPage((p) => p - 1)}
+                    style={pgBtn(page === 0)}
+                  >‹ Prev</button>
+                  <span style={{ fontSize: 12, color: "#5b5b66", fontWeight: 600, padding: "0 8px", display: "flex", alignItems: "center" }}>
+                    {page + 1} / {totalPages}
+                  </span>
+                  <button
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage((p) => p + 1)}
+                    style={pgBtn(page >= totalPages - 1)}
+                  >Next ›</button>
+                  <button
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage(totalPages - 1)}
+                    style={pgBtn(page >= totalPages - 1)}
+                    title="Last page"
+                  >»»</button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 };
+
+const dateInput: CSSProperties = {
+  fontSize: 12, fontFamily: "var(--font-mono),monospace",
+  padding: "5px 10px", border: "1px solid #e5e7eb", borderRadius: 8,
+  background: "white", color: "#0b0b10", outline: "none",
+};
+
+const pgBtn = (disabled: boolean): CSSProperties => ({
+  fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 8,
+  border: "1px solid #e5e7eb", background: disabled ? "#f9f9fb" : "white",
+  color: disabled ? "#d1d5db" : "#5b5b66", cursor: disabled ? "default" : "pointer",
+});
 
 // ─── Ika dWallet Setup Modal ───────────────��──────────────────────────────────
 
@@ -1924,21 +2147,78 @@ type ActionModalProps = {
   modal: ModalState;
   setModal: (m: ModalState | null) => void;
   fhe: boolean;
-  onSubmit: (type: ModalType, pool: PoolView, amount: bigint) => void;
+  onSubmit: (type: ModalType, pool: PoolView, amount: bigint, withdrawShares?: bigint) => void;
   pythPrices: PythPrices;
 };
 
+/** Shows principal + interest breakdown for both withdraw and repay modals. */
+const BreakdownInfo = ({ pool, principal, interest, walletBalance, isRepay, price }: {
+  pool: PoolView; principal: string; interest: string;
+  walletBalance?: string; isRepay: boolean; price: number | null;
+}) => {
+  const dp = pool.decimals > 4 ? 4 : pool.decimals;
+  const principalNum = Number(BigInt(principal)) / 10 ** pool.decimals;
+  const interestNum = Number(BigInt(interest)) / 10 ** pool.decimals;
+  const total = principalNum + interestNum;
+  const walletBal = walletBalance ? Number(BigInt(walletBalance)) / 10 ** pool.decimals : null;
+  const insufficient = isRepay && walletBal !== null && walletBal < total;
+  return (
+    <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+      <span>{isRepay ? "Borrowed" : "Deposited"}: {principalNum.toFixed(dp)} {pool.symbol}</span>
+      <span>Interest {isRepay ? "owed" : "earned"}: <span style={{ color: isRepay ? "#dc2626" : "#059669" }}>
+        {isRepay ? "+" : "+"}{interestNum.toFixed(dp)} {pool.symbol}
+      </span></span>
+      <span style={{ fontWeight: 600, color: "#5b5b66" }}>
+        {isRepay ? "Total debt" : "Total value"}: {total.toFixed(dp)} {pool.symbol}
+        {price ? ` · ${formatUsd(total * price)}` : ""}
+      </span>
+      {insufficient && (
+        <span style={{ color: "#f59e0b", fontWeight: 600, marginTop: 2 }}>
+          Wallet: {walletBal!.toFixed(dp)} {pool.symbol} — not enough for full repay
+        </span>
+      )}
+    </div>
+  );
+};
+
 const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModalProps) => {
-  const { type, pool } = modal;
+  const { type, pool, maxAmount, maxShares, principal, interest, walletBalance } = modal;
   const poolType = getPoolType(pool.symbol);
   const [amount, setAmount] = useState("");
   const [inputMode, setInputMode] = useState<"token" | "usd">("token");
   const [encPos, setEncPos] = useState(fhe && poolType === "enc");
   const [chain, setChain] = useState(poolType === "ika" ? "ika" : "solana");
+  const [customPct, setCustomPct] = useState("");
+  const [showCustomPct, setShowCustomPct] = useState(false);
+  /** Tracks which percentage button was used (for bigint share math on withdraw). null = manual input. */
+  const [selectedPct, setSelectedPct] = useState<number | null>(null);
 
   const price = pythPrices[pool.id] ?? null;
   const parsed = parseFloat(amount);
   const validInput = !isNaN(parsed) && parsed > 0;
+
+  // Max amount for withdraw/repay as a human-readable number
+  const hasMax = (type === "withdraw" || type === "repay") && maxAmount && maxAmount !== "0";
+  const maxTokens = hasMax ? Number(BigInt(maxAmount)) / 10 ** pool.decimals : 0;
+
+  const applyPercent = (pct: number) => {
+    if (!hasMax) return;
+    const val = (maxTokens * pct) / 100;
+    if (inputMode === "usd" && price) {
+      setAmount((val * price).toFixed(2));
+    } else {
+      setAmount(val.toFixed(pool.decimals > 4 ? 4 : pool.decimals));
+    }
+    setSelectedPct(pct);
+    setShowCustomPct(false);
+    setCustomPct("");
+  };
+
+  const applyCustomPercent = () => {
+    const pct = parseFloat(customPct);
+    if (isNaN(pct) || pct <= 0 || pct > 100) return;
+    applyPercent(pct);
+  };
 
   // Derive token and USD amounts from whichever mode the user is typing in
   const tokenAmount = inputMode === "token" ? (validInput ? parsed : 0) : (validInput && price ? parsed / price : 0);
@@ -1952,13 +2232,38 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
 
   const handleConfirm = () => {
     if (!amount || tokenAmount <= 0) return;
+
+    // For Max (100%) on repay/withdraw, use the raw bigint maxAmount to avoid float precision loss
+    if (selectedPct !== null && selectedPct >= 100 && maxAmount) {
+      const rawMax = BigInt(maxAmount);
+      if (rawMax <= 0n) return;
+      let withdrawShares: bigint | undefined;
+      if (type === "withdraw" && maxShares) {
+        withdrawShares = BigInt(maxShares);
+      }
+      // For repay max, send u64::MAX so on-chain program repays exact current debt
+      // (avoids dust from interest accruing between read and TX confirmation)
+      const submitAmount = type === "repay" ? 18446744073709551615n : rawMax;
+      onSubmit(type, pool, submitAmount, withdrawShares);
+      setModal(null);
+      return;
+    }
+
     // Convert the resolved token amount to lamports (base units)
     const tokenStr = tokenAmount.toFixed(pool.decimals);
     const [whole = "0", frac = ""] = tokenStr.split(".");
     const fracPadded = frac.padEnd(pool.decimals, "0").slice(0, pool.decimals);
     const lamports = BigInt(whole + fracPadded);
     if (lamports <= 0n) return;
-    onSubmit(type, pool, lamports);
+
+    // For withdraw: compute shares via bigint math to avoid float precision issues
+    let withdrawShares: bigint | undefined;
+    if (type === "withdraw" && maxShares && selectedPct !== null) {
+      const totalShares = BigInt(maxShares);
+      withdrawShares = (totalShares * BigInt(Math.round(selectedPct * 100))) / 10000n;
+    }
+
+    onSubmit(type, pool, lamports, withdrawShares);
     setModal(null);
   };
 
@@ -2001,13 +2306,13 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
 
         <div style={{ background: "#f4f4f6", border: "1px solid #e7e7ec", borderRadius: 12, display: "flex", alignItems: "center", padding: "10px 14px", marginBottom: 6 }}>
           {inputMode === "usd" && <span style={{ fontSize: 22, fontWeight: 600, color: "#0b0b10", marginRight: 2 }}>$</span>}
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" style={{ background: "none", border: "none", outline: "none", fontSize: 22, fontWeight: 600, flex: 1, color: "#0b0b10", width: 0 }} />
+          <input value={amount} onChange={(e) => { setAmount(e.target.value); setSelectedPct(null); }} placeholder="0.00" style={{ background: "none", border: "none", outline: "none", fontSize: 22, fontWeight: 600, flex: 1, color: "#0b0b10", width: 0 }} />
           <span style={{ fontSize: 14, fontWeight: 600, color: "#5b5b66" }}>{inputMode === "token" ? pool.symbol : "USD"}</span>
           {price && (
             <button onClick={toggleMode} title={`Switch to ${inputMode === "token" ? "USD" : pool.symbol}`} style={{ marginLeft: 8, width: 28, height: 28, borderRadius: 999, border: "1px solid #e7e7ec", background: "white", cursor: "pointer", display: "grid", placeItems: "center", fontSize: 13, color: "#5b5b66", flexShrink: 0 }}>⇄</button>
           )}
         </div>
-        <div style={{ fontSize: 11.5, color: "#5b5b66", marginBottom: 14, display: "flex", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 11.5, color: "#5b5b66", marginBottom: hasMax ? 8 : 14, display: "flex", justifyContent: "space-between" }}>
           <span>
             {inputMode === "token" ? `Enter amount in ${pool.symbol}` : `Enter amount in USD`}
             {price && <span style={{ color: "#9ca3af" }}> · {formatPrice(price, "")}/{pool.symbol}</span>}
@@ -2018,6 +2323,37 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
             </span>
           )}
         </div>
+
+        {hasMax && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 4, marginBottom: showCustomPct ? 6 : 0 }}>
+              {[25, 50, 75, 100].map((pct) => (
+                <button key={pct} onClick={() => applyPercent(pct)} style={{ flex: 1, padding: "6px 0", borderRadius: 8, border: "1px solid #e7e7ec", background: "white", fontSize: 12.5, fontWeight: 600, color: "#0b0b10", cursor: "pointer", transition: "all .15s" }} onMouseEnter={(e) => { e.currentTarget.style.background = "#f4f4f6"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}>
+                  {pct === 100 ? "Max" : `${pct}%`}
+                </button>
+              ))}
+              <button onClick={() => setShowCustomPct((v) => !v)} style={{ width: 36, borderRadius: 8, border: `1px solid ${showCustomPct ? "#6d28d9" : "#e7e7ec"}`, background: showCustomPct ? "#ede9fe" : "white", fontSize: 12, fontWeight: 600, color: showCustomPct ? "#6d28d9" : "#5b5b66", cursor: "pointer", transition: "all .15s", display: "grid", placeItems: "center" }} title="Custom %">
+                %
+              </button>
+            </div>
+            {showCustomPct && (
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <input value={customPct} onChange={(e) => setCustomPct(e.target.value)} placeholder="e.g. 33" style={{ flex: 1, padding: "6px 10px", borderRadius: 8, border: "1px solid #e7e7ec", background: "#f4f4f6", fontSize: 12.5, fontWeight: 500, outline: "none", color: "#0b0b10" }} onKeyDown={(e) => { if (e.key === "Enter") applyCustomPercent(); }} />
+                <span style={{ fontSize: 12, color: "#5b5b66", fontWeight: 600 }}>%</span>
+                <button onClick={applyCustomPercent} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #e7e7ec", background: "#0b0b10", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Apply</button>
+              </div>
+            )}
+            {principal && interest ? (
+              <BreakdownInfo pool={pool} principal={principal} interest={interest}
+                walletBalance={walletBalance} isRepay={type === "repay"} price={price} />
+            ) : (
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+                Balance: {maxTokens.toFixed(pool.decimals > 4 ? 4 : pool.decimals)} {pool.symbol}
+                {price ? ` · ${formatUsd(maxTokens * price)}` : ""}
+              </div>
+            )}
+          </div>
+        )}
 
         {(type === "supply" || type === "borrow") && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: encPos ? "#ede9fe" : "#f4f4f6", borderRadius: 10, marginBottom: 14, cursor: "pointer", border: `1px solid ${encPos ? "#c4b5fd" : "#e7e7ec"}`, transition: "all .2s" }} onClick={() => setEncPos((v) => !v)}>
@@ -2042,6 +2378,9 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
               <InfoRow k="Liq. threshold" v={wadToPctStr(pool.liquidationThresholdWad)} />
               <InfoRow k="Liq. bonus" v={wadToPctStr(pool.liquidationBonusWad)} />
             </>
+          )}
+          {(type === "withdraw" || type === "repay") && (
+            <InfoRow k="Est. tx fee" v="~0.000005 SOL" vc="#9ca3af" />
           )}
         </div>
 
@@ -2086,10 +2425,27 @@ export default function DAppPage() {
   const toastIdRef = useRef(0);
   const pythPrices = usePythPrices();
 
+  // Track pool addresses where the user has collateral (non-zero deposits)
+  const [userCollateralPools, setUserCollateralPools] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!publicKey) { setUserCollateralPools(new Set()); return; }
+    fetch(`/api/positions/${encodeURIComponent(publicKey.toBase58())}/detail`, { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((d: { positions: DetailPosition[] }) => {
+        const collPools = new Set<string>();
+        for (const p of d.positions ?? []) {
+          if (BigInt(p.deposit_tokens || "0") > 0n) collPools.add(p.pool_address);
+        }
+        setUserCollateralPools(collPools);
+      })
+      .catch(() => {});
+  }, [publicKey, portfolioRefreshKey]);
+
   // Sync view from localStorage after hydration to avoid SSR mismatch
+  const validViews: View[] = ["markets", "portfolio", "flash", "liquidate", "history"];
   useEffect(() => {
     const saved = localStorage.getItem("veil_view") as View | null;
-    if (saved && saved !== view) setView(saved);
+    if (saved && saved !== view && validViews.includes(saved)) setView(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2134,7 +2490,7 @@ export default function DAppPage() {
   }, [actions.status, actions.txSig, actions.errorMsg]);
 
   // Called by ActionModal on submit — fires the action and creates a toast
-  const handleActionSubmit = useCallback((type: ModalType, pool: PoolView, amount: bigint) => {
+  const handleActionSubmit = useCallback((type: ModalType, pool: PoolView, amount: bigint, withdrawShares?: bigint) => {
     actions.reset();
     const id = ++toastIdRef.current;
     activeToastId.current = id;
@@ -2144,15 +2500,27 @@ export default function DAppPage() {
     if (type === "supply") {
       actions.deposit(pool, amount);
     } else if (type === "withdraw") {
-      const shares = pool.supplyIndex > 0n ? (amount * WAD) / pool.supplyIndex : amount;
+      // Use pre-computed bigint shares when available (from % buttons), fall back to token→shares conversion
+      const shares = withdrawShares ?? (pool.supplyIndex > 0n ? (amount * WAD) / pool.supplyIndex : amount);
       actions.withdraw(pool, shares);
     } else if (type === "borrow") {
-      actions.borrow(pool, amount);
+      // Smart borrow: if user has collateral in other pools, use crossBorrow
+      // so the on-chain program can consider all collateral for HF calculation
+      const poolAddr = pool.poolAddress.toBase58();
+      const otherCollPools = pools.filter((p) => {
+        const addr = p.poolAddress.toBase58();
+        return addr !== poolAddr && userCollateralPools.has(addr);
+      });
+      if (otherCollPools.length > 0) {
+        actions.crossBorrow(pool, otherCollPools, amount);
+      } else {
+        actions.borrow(pool, amount);
+      }
     } else if (type === "repay") {
       actions.repay(pool, amount);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actions.deposit, actions.withdraw, actions.borrow, actions.repay, actions.reset]);
+  }, [actions.deposit, actions.withdraw, actions.borrow, actions.repay, actions.crossBorrow, actions.reset, pools, userCollateralPools]);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -2170,7 +2538,6 @@ export default function DAppPage() {
       <main className="dapp-main">
         {view === "markets" && <MarketsView fhe={fhe} setModal={setModal} pools={pools} poolsLoading={poolsLoading} poolsError={poolsError} refreshPools={refreshPools} />}
         {view === "portfolio" && <PortfolioView fhe={fhe} connected={connected} setModal={setModal} pools={pools} refreshKey={portfolioRefreshKey} />}
-        {view === "cross" && <CrossBorrowView connected={connected} pools={pools} pythPrices={pythPrices} />}
         {view === "flash" && <FlashView connected={connected} fhe={fhe} pools={pools} pythPrices={pythPrices} />}
         {view === "liquidate" && <LiquidateView connected={connected} pools={pools} pythPrices={pythPrices} />}
         {view === "history" && <HistoryView connected={connected} pools={pools} />}

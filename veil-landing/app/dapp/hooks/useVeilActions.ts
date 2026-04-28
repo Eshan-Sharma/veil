@@ -34,21 +34,19 @@ const logTx = (p: { signature: string; wallet: string; action: string; pool_addr
   }).catch(() => {});
 };
 
-const syncPool = (poolAddress: string, rpc: string) => {
-  void fetch("/api/pools/sync", {
+const syncPool = (poolAddress: string, rpc: string): Promise<void> =>
+  fetch("/api/pools/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pool_address: poolAddress, rpc }),
-  }).catch(() => {});
-};
+  }).then(() => {}).catch(() => {});
 
-const syncPosition = (poolAddress: string, user: string, rpc: string) => {
-  void fetch("/api/positions/sync", {
+const syncPosition = (poolAddress: string, user: string, rpc: string): Promise<void> =>
+  fetch("/api/positions/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pool_address: poolAddress, user, rpc }),
-  }).catch(() => {});
-};
+  }).then(() => {}).catch(() => {});
 
 export const useVeilActions = () => {
   const { publicKey, sendTransaction } = useWallet();
@@ -74,19 +72,48 @@ export const useVeilActions = () => {
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
+
+      // Simulate first to surface program errors with logs (before wallet prompt)
+      try {
+        const sim = await connection.simulateTransaction(tx);
+        if (sim.value.err) {
+          console.error(`[veil] ${meta.action} simulation failed:`, sim.value.err, sim.value.logs);
+          const progErr = sim.value.logs?.find((l) => l.includes("Error") || l.includes("failed"));
+          throw new Error(progErr ?? `Simulation failed: ${JSON.stringify(sim.value.err)}`);
+        }
+      } catch (simErr) {
+        // Re-throw program errors, ignore encoding/network errors from unsigned tx
+        if (simErr instanceof Error && simErr.message.includes("failed")) throw simErr;
+        console.warn(`[veil] simulation skipped:`, simErr);
+      }
+
       setStatus("signing");
       const sig = await sendTransaction(tx, connection);
       setStatus("confirming");
       await connection.confirmTransaction(sig, "confirmed");
-      setStatus("success");
       setTxSig(sig);
       logTx({ signature: sig, wallet: publicKey.toBase58(), action: meta.action,
               pool_address: meta.poolAddress, amount: meta.amount, status: "confirmed" });
-      syncPool(meta.poolAddress, endpoint);
-      syncPosition(meta.poolAddress, publicKey.toBase58(), endpoint);
+      // Sync on-chain state to DB before signalling success (so portfolio refetch sees fresh data)
+      await Promise.all([
+        syncPool(meta.poolAddress, endpoint),
+        syncPosition(meta.poolAddress, publicKey.toBase58(), endpoint),
+      ]);
+      setStatus("success");
     } catch (e: unknown) {
       setStatus("error");
-      setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
+      const msg = e instanceof Error ? e.message : "Transaction failed";
+      // Extract program logs from SendTransactionError for debugging
+      const err = e as Record<string, unknown>;
+      const logs = (err?.logs ?? (err?.cause as Record<string, unknown>)?.logs) as string[] | undefined;
+      if (logs?.length) {
+        console.error(`[veil] ${meta.action} failed — program logs:`, logs);
+        const progErr = logs.find((l: string) => l.includes("Error") || l.includes("failed"));
+        setErrorMsg(progErr ? `${msg}: ${progErr}` : msg);
+      } else {
+        console.error(`[veil] ${meta.action} failed:`, e);
+        setErrorMsg(msg);
+      }
     }
   }
 
