@@ -122,6 +122,7 @@ type UnhealthyPosition = {
   deposit_shares: string;
   borrow_principal: string;
   health_factor_wad: string | null;
+  account_health_factor_wad: string | null;
 };
 
 // ─── Pool helpers ────────────────────────────────────────────────────────────
@@ -1539,8 +1540,9 @@ const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; p
     const principal = BigInt(pos.borrow_principal || "0");
     const deposits = pool ? (shares * pool.supplyIndex) / WAD : shares;
     const borrows = principal;
-    const liqThreshold = pool?.liquidationThresholdWad ?? (WAD * 80n / 100n);
-    const hf = borrows > 0n ? estimateHF(deposits, borrows, liqThreshold) : null;
+    // Use account-level HF from the API (cross-collateral, Aave-style)
+    const acctHfWad = pos.account_health_factor_wad ? BigInt(pos.account_health_factor_wad) : null;
+    const hf = acctHfWad != null ? Number(acctHfWad * 10000n / WAD) / 10000 : null;
     return { pos, pool, deposits, borrows, hf };
   }).filter((e) => e.pool != null) as { pos: UnhealthyPosition; pool: PoolView; deposits: bigint; borrows: bigint; hf: number | null }[];
 
