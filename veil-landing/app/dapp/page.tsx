@@ -46,6 +46,7 @@ type DetailPosition = {
   symbol: string | null;
   decimals: number;
   health_factor_wad: string | null;
+  account_health_factor_wad?: string;
   last_synced_at: string;
   deposit_shares: string;
   borrow_principal: string;
@@ -942,23 +943,6 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
           {isSupply ? `${pos.pool_ltv_pct}%` : "—"}
         </div>
 
-        <div>
-          {pos.borrow_debt !== "0" && pos.health_factor_wad ? (() => {
-            const hf = formatHF(pos.health_factor_wad);
-            const val = parseFloat(hf.label);
-            const color = isNaN(val) ? "#059669" : val < 1.2 ? "#dc2626" : val < 1.5 ? "#d97706" : "#059669";
-
-            return (
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono),monospace", color }}>{hf.label}</span>
-              </div>
-            );
-          })() : (
-            <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
-          )}
-        </div>
-
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div onClick={(e) => e.stopPropagation()}>
             <button
@@ -1199,6 +1183,7 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
         borrow_principal: fresh.borrow_principal,
         borrow_debt: fresh.borrow_debt,
         health_factor_wad: fresh.health_factor_wad,
+        account_health_factor_wad: fresh.account_health_factor_wad,
         interest_earned: interestEarned,
         interest_owed: interestOwed,
         on_chain: true,
@@ -1223,15 +1208,31 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
   const rows = toVirtualRows(livePositions, poolMap);
   const visible = rows.filter((r) => filter === "all" || r.side === filter);
 
-  const totalSupplyCount = rows.filter((r) => r.side === "supply").length;
-  const totalBorrowCount = rows.filter((r) => r.side === "borrow").length;
-  const overallHf = livePositions.reduce((min, p) => {
-    if (!p.health_factor_wad || p.borrow_debt === "0") return min;
-    const hf = formatHF(p.health_factor_wad);
-    const val = parseFloat(hf.label);
+  const supplyRows = rows.filter((r) => r.side === "supply");
+  const borrowRows = rows.filter((r) => r.side === "borrow");
+  const totalSupplyCount = supplyRows.length;
+  const totalBorrowCount = borrowRows.length;
 
-    return isNaN(val) ? min : Math.min(min, val);
-  }, 999);
+  // Compute total USD values for supply & borrow
+  const totalSupplyUsd = supplyRows.reduce((sum, r) => {
+    const usd = tokenToUsd(BigInt(r.amount), r.pos.decimals, pythPrices[r.pool.id]);
+    return sum + (usd ?? 0);
+  }, 0);
+  const totalBorrowUsd = borrowRows.reduce((sum, r) => {
+    const usd = tokenToUsd(BigInt(r.amount), r.pos.decimals, pythPrices[r.pool.id]);
+    return sum + (usd ?? 0);
+  }, 0);
+
+  // Use account-level (cross-collateral) HF if available, otherwise fall back to min per-pool HF
+  const acctHfEntry = livePositions.find((p) => p.account_health_factor_wad);
+  const overallHf = acctHfEntry
+    ? (() => { const hf = formatHF(acctHfEntry.account_health_factor_wad!); return parseFloat(hf.label) || 999; })()
+    : livePositions.reduce((min, p) => {
+        if (!p.health_factor_wad || p.borrow_debt === "0") return min;
+        const hf = formatHF(p.health_factor_wad);
+        const val = parseFloat(hf.label);
+        return isNaN(val) ? min : Math.min(min, val);
+      }, 999);
   const hfColor = overallHf > 1.5 ? "#059669" : overallHf > 1.1 ? "#d97706" : "#dc2626";
 
   if (loading) {
@@ -1270,8 +1271,8 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
       {/* Metrics row */}
       <div className="metrics-row">
         <MetricCard label="Positions" value={String(rows.length)} sub={`${totalSupplyCount} supplied · ${totalBorrowCount} borrowed`} />
-        <MetricCard label="Supply positions" value={String(totalSupplyCount)} color="#059669" sub="Earning interest" />
-        <MetricCard label="Borrow positions" value={String(totalBorrowCount)} color={totalBorrowCount > 0 ? "#dc2626" : "#0b0b10"} sub="Paying interest" />
+        <MetricCard label="Supply positions" value={formatUsd(totalSupplyUsd)} color="#059669" sub={`${totalSupplyCount} earning interest`} />
+        <MetricCard label="Borrow positions" value={formatUsd(totalBorrowUsd)} color={totalBorrowCount > 0 ? "#dc2626" : "#0b0b10"} sub={totalBorrowCount === 0 ? "No debt" : `${totalBorrowCount} paying interest`} />
         <MetricCard label="Health Factor" value={overallHf < 999 ? overallHf.toFixed(2) : "∞"} color={overallHf < 999 ? hfColor : "#059669"} sub={overallHf < 1.0 ? "LIQUIDATABLE" : overallHf < 1.2 ? "At risk" : "Safe — liq. < 1.0"} />
       </div>
 
@@ -1286,7 +1287,7 @@ const PortfolioView = ({ fhe, connected, setModal, pools, refreshKey }: { fhe: b
             </div>
 
             <div className="pos-row-grid" style={{ padding: "10px 18px", marginTop: 10, borderBottom: "1px solid #f0f0f3" }}>
-              {["Asset", "Total position", "APY", "Interest", "LTV", "Health", "Actions"].map((h, i) => (
+              {["Asset", "Total position", "APY", "Interest", "LTV", "Actions"].map((h, i) => (
                 <span key={i} style={{ fontSize: 11, color: "#5b5b66", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{h}</span>
               ))}
             </div>
