@@ -503,10 +503,10 @@ details[open] .faq-caret {
   top: 82px;
 }
 
-/* Position row grid — 7 cols: Asset | Position | APY | Interest | LTV | Health | Actions */
+/* Position row grid — 6 cols: Asset | Position | APY | Interest | LTV | Actions */
 .pos-row-grid {
   display: grid;
-  grid-template-columns: 2fr 1.3fr 0.85fr 1.3fr 0.7fr 0.7fr 100px;
+  grid-template-columns: 2fr 1.3fr 0.85fr 1.3fr 0.7fr 100px;
   align-items: center;
 }
 /* Expanded tx detail grid — 5 cols: Transaction | Action | Amount | Timestamp | View */
@@ -537,7 +537,7 @@ details[open] .faq-caret {
   .portfolio-sidebar { position: static; }
   .pos-row-grid > :nth-child(4),
   .pos-row-grid > :nth-child(5) { display: none; }
-  .pos-row-grid { grid-template-columns: 2fr 1.3fr 0.85fr 0.7fr 100px; }
+  .pos-row-grid { grid-template-columns: 2fr 1.3fr 0.85fr 100px; }
 }
 
 @media (max-width: 768px) {
@@ -570,10 +570,9 @@ details[open] .faq-caret {
   .flash-grid { grid-template-columns: 1fr !important; }
   .split-layout .glass-card { position: static !important; }
 
-  /* Portfolio: also hide Health col, shrink actions */
+  /* Portfolio: hide Interest + LTV cols, shrink actions */
   .pos-row-grid > :nth-child(4),
-  .pos-row-grid > :nth-child(5),
-  .pos-row-grid > :nth-child(6) { display: none; }
+  .pos-row-grid > :nth-child(5) { display: none; }
   .pos-row-grid { grid-template-columns: 2fr 1.2fr 0.8fr 100px; }
   /* Expanded tx detail: hide Amount + Timestamp */
   .pos-chunk-grid > :nth-child(3),
@@ -617,7 +616,6 @@ details[open] .faq-caret {
   /* Portfolio: keep only Asset + APY + action button */
   .pos-row-grid > :nth-child(2),
   .pos-row-grid > :nth-child(4),
-  .pos-row-grid > :nth-child(5),
-  .pos-row-grid > :nth-child(6) { display: none; }
+  .pos-row-grid > :nth-child(5) { display: none; }
   .pos-row-grid { grid-template-columns: 1fr 0.6fr 90px; padding-left: 12px !important; padding-right: 12px !important; }
 }
