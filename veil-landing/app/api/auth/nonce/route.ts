@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { newNonce, buildAuthMessage, expectedOrigin } from "@/lib/auth/signature";
 import { logSafe } from "@/lib/log";
+import { clientIp } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -9,14 +10,6 @@ const TTL_SECONDS = 300;        // 5-minute single-use nonce
 const RATE_LIMIT_WINDOW = 60;   // seconds
 const RATE_LIMIT_PER_PUBKEY = 12;
 const RATE_LIMIT_PER_IP     = 30;
-
-function clientIp(req: Request): string {
-  const fwd = req.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0].trim();
-  const real = req.headers.get("x-real-ip");
-  if (real) return real;
-  return "unknown";
-}
 
 async function exceedsRateLimit(bucket: string, max: number): Promise<boolean> {
   const rows = await sql`
@@ -41,6 +34,11 @@ export async function POST(req: Request) {
   if (!pubkey || !action) return NextResponse.json({ error: "pubkey and action required" }, { status: 400 });
   if (pubkey.length < 32 || pubkey.length > 44) return NextResponse.json({ error: "invalid pubkey" }, { status: 400 });
 
+  // Origin must be present so the signed message commits to the requester's
+  // domain (anti-phishing). See `expectedOrigin` doc — no fallback.
+  const origin = expectedOrigin(req);
+  if (!origin) return NextResponse.json({ error: "origin header required" }, { status: 400 });
+
   const ip = clientIp(req);
 
   // ── Rate limit (per pubkey AND per IP) ─────────────────────────────────
@@ -63,7 +61,6 @@ export async function POST(req: Request) {
   // ── Issue nonce ────────────────────────────────────────────────────────
   const nonce = newNonce();
   const expiresAt = new Date(Date.now() + TTL_SECONDS * 1000);
-  const origin = expectedOrigin(req);
 
   await sql`
     INSERT INTO auth_nonces (pubkey, nonce, expires_at)

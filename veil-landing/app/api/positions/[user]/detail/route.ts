@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
+import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -41,9 +42,12 @@ function computeHF(
  * Computes deposit token value, borrow debt, interest, and APYs server-side.
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ user: string }> },
 ) {
+  const limited = await rateLimit(req, { key: "positions.detail", max: 60, windowSec: 60 });
+  if (limited) return limited;
+
   const { user } = await ctx.params;
   if (!user) return NextResponse.json({ error: "user required" }, { status: 400 });
 
@@ -165,8 +169,10 @@ export async function GET(
     const supplyApy = borrowApy * (utilPct / 100) * (1 - reserveFactor / 100);
 
     const poolTxs = txByPool[r.pool_address as string] ?? [];
-    const supplyTxs = poolTxs.filter((t) => t.action === "deposit" || t.action === "withdraw");
-    const borrowTxs = poolTxs.filter((t) => t.action === "borrow" || t.action === "repay");
+    const SUPPLY_ACTIONS = new Set(["deposit", "withdraw", "cross_withdraw"]);
+    const BORROW_ACTIONS = new Set(["borrow", "repay", "cross_borrow", "cross_repay", "cross_liquidate", "liquidate"]);
+    const supplyTxs = poolTxs.filter((t) => SUPPLY_ACTIONS.has(t.action as string));
+    const borrowTxs = poolTxs.filter((t) => BORROW_ACTIONS.has(t.action as string));
 
     return {
       position_address: r.position_address,

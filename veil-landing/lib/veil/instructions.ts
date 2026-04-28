@@ -476,54 +476,8 @@ export function updateOraclePriceIx(
   });
 }
 
-/** ONLY FOR TESTING: Set oracle price/expo directly on a pool. */
-export function mockOracleIx(
-  authority: PublicKey,
-  pool: PublicKey,
-  price: bigint,
-  expo: number,
-): TransactionInstruction {
-  const data = concat(
-    u8(0xFD),
-    // i64 LE for price
-    (() => {
-      const buf = new Uint8Array(8);
-      const dv = new DataView(buf.buffer);
-      dv.setBigInt64(0, price, true);
-      return buf;
-    })(),
-    // i32 LE for expo
-    (() => {
-      const buf = new Uint8Array(4);
-      const dv = new DataView(buf.buffer);
-      dv.setInt32(0, expo, true);
-      return buf;
-    })(),
-  );
-  return new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: authority, isSigner: true, isWritable: false },
-      { pubkey: pool, isSigner: false, isWritable: true },
-    ],
-    data,
-  });
-}
-
-/** ONLY FOR TESTING: Inject 100 tokens of fees into the pool state. */
-export function mockFeesIx(
-  authority: PublicKey,
-  pool: PublicKey,
-): TransactionInstruction {
-  return new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: authority, isSigner: true, isWritable: false },
-      { pubkey: pool, isSigner: false, isWritable: true },
-    ],
-    data: Buffer.from([0xFE]),
-  });
-}
+// Mock test-only instructions (mockOracleIx, mockFeesIx) live in
+// `scripts/_mock-instructions.ts` so they never reach the browser bundle.
 
 // ─── SetPoolDecimals (discriminator 0x15) ────────────────────────────────────
 //

@@ -38,11 +38,15 @@ export function newNonce(): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Server-side: the canonical origin a request claims to come from. */
-export function expectedOrigin(req: Request): string {
-  // Prefer request Origin header; fall back to a configured default.
+/**
+ * Server-side: the canonical origin the request claims to come from.
+ *
+ * Returns `null` when the Origin header is missing. Callers MUST treat that
+ * as a 400. Falling back to a configured default would weaken the SIWE-style
+ * origin binding in `buildAuthMessage` — a request without an Origin header
+ * has no provable site-of-origin, so we refuse to invent one.
+ */
+export function expectedOrigin(req: Request): string | null {
   const origin = req.headers.get("origin");
-  if (origin) return origin;
-  const fallback = process.env.PUBLIC_ORIGIN ?? "http://localhost:4321";
-  return fallback;
+  return origin ? origin : null;
 }

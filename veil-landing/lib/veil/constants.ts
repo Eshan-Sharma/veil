@@ -1,14 +1,39 @@
 import { PublicKey } from "@solana/web3.js";
+import { NETWORK } from "../network";
 
 /**
- * Set NEXT_PUBLIC_VEIL_PROGRAM_ID in your .env.local after deploying.
- * Build:  cd programs && cargo build-sbf
- * Deploy: solana program deploy target/deploy/veil_lending.so --url devnet
+ * Network-keyed program ID resolution.
+ *
+ * Mainnet and devnet IDs are pinned at compile time so a misconfigured env can
+ * never silently point production at the System Program (the old fallback).
+ * Localnet is read from `NEXT_PUBLIC_VEIL_PROGRAM_ID` because every dev's
+ * `solana program deploy` produces a fresh keypair.
+ *
+ * Update the placeholders below after the corresponding deploy:
+ *   cargo build-sbf
+ *   solana program deploy --url mainnet-beta target/deploy/veil_lending.so
  */
-export const PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_VEIL_PROGRAM_ID ??
-    "11111111111111111111111111111111" // placeholder until deployed
-);
+const MAINNET_PROGRAM_ID = "VeiLMainNetProgramId11111111111111111111111";
+const DEVNET_PROGRAM_ID = "VeiLDevnetProgramId111111111111111111111111";
+
+function resolveProgramId(): PublicKey {
+  if (NETWORK === "mainnet") {
+    return new PublicKey(MAINNET_PROGRAM_ID);
+  }
+  if (NETWORK === "devnet") {
+    return new PublicKey(DEVNET_PROGRAM_ID);
+  }
+  // localnet — must be set per-machine after deploy.
+  const env = process.env.NEXT_PUBLIC_VEIL_PROGRAM_ID;
+  if (!env) {
+    throw new Error(
+      "NEXT_PUBLIC_VEIL_PROGRAM_ID is required when NEXT_PUBLIC_SOLANA_CLUSTER=localnet"
+    );
+  }
+  return new PublicKey(env);
+}
+
+export const PROGRAM_ID = resolveProgramId();
 
 export const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"

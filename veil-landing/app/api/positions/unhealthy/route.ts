@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
+import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -14,9 +15,13 @@ const WAD = BigInt("1000000000000000000");
  * so per-pool HF is meaningless. We compute account HF across all positions.
  */
 export async function GET(req: Request) {
+  const limited = await rateLimit(req, { key: "positions.unhealthy", max: 60, windowSec: 60 });
+  if (limited) return limited;
+
   const { searchParams } = new URL(req.url);
   const poolFilter = searchParams.get("pool");
-  const limit = Math.min(Number(searchParams.get("limit") ?? 50), 200);
+  const rawLimit = Number(searchParams.get("limit") ?? 50);
+  const limit = Math.min(Number.isFinite(rawLimit) ? Math.max(rawLimit, 1) : 50, 200);
 
   // Fetch ALL positions that have borrows, joined with pool data for HF calc
   const rows = await sql`

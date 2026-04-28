@@ -35,10 +35,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "missing pool fields" }, { status: 400 });
   }
 
+  const origin = expectedOrigin(req);
+  if (!origin) return NextResponse.json({ error: "origin header required" }, { status: 400 });
+
   const auth = await verifyAdminRequest({
     pubkey: actor, nonce, signature,
     action: `init_pool:${token_mint}`,
-    origin: expectedOrigin(req),
+    origin,
   });
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: 401 });
 

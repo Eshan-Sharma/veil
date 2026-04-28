@@ -20,13 +20,14 @@ async function main() {
   const { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } = await import("@solana/web3.js");
   const { createAssociatedTokenAccountInstruction, getAssociatedTokenAddressSync, createMint, mintTo } = await import("@solana/spl-token");
   const { buildInitializePoolTx } = await import("../lib/veil/initialize");
-  const { updatePoolIx, depositIx, borrowIx, mockOracleIx, setPoolDecimalsIx } = await import("../lib/veil/instructions");
+  const { updatePoolIx, depositIx, borrowIx, setPoolDecimalsIx } = await import("../lib/veil/instructions");
+  const { mockOracleIx } = await import("./_mock-instructions");
   const { findPositionAddress, findPoolAuthorityAddress } = await import("../lib/veil/pda");
   const { WAD, PROGRAM_ID } = await import("../lib/veil/constants");
   const fs = await import("fs");
 
   const connection = new Connection("http://127.0.0.1:8899", "confirmed");
-  const keypairPath = join(process.env.HOME ?? "~", "my-solana-testing-dev-wallet.json");
+  const keypairPath = process.env.PAYER_KEYPAIR ?? join(process.env.HOME ?? "~", ".config/solana/id.json");
   const secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(keypairPath, "utf-8")));
   const payer = Keypair.fromSecretKey(secretKey);
 
