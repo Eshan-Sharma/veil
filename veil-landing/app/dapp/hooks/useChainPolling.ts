@@ -5,6 +5,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { decodeLendingPool, decodeUserPosition, sharesToTokens, borrowDebt, healthFactor, accountHealthFactor } from "@/lib/veil/state";
 import type { CrossHFInput } from "@/lib/veil/state";
 import { findPositionAddress } from "@/lib/veil/pda";
+import { logSafe } from "@/lib/log";
 
 export type ChainPositionUpdate = {
   position_address: string;
@@ -106,7 +107,7 @@ export function useChainPolling(
 
       setUpdates(results);
     } catch (err) {
-      console.warn("[veil] chain polling error:", err);
+      logSafe("warn", "veil.chain.poll_failed", { err: String(err) });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endpoint, userKey?.toBase58(), poolsKey]);

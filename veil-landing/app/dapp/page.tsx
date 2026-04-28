@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { TOKEN_PROGRAM_ID } from "@/lib/veil";
+import { TOKEN_PROGRAM_ID, fetchOnchainTxs } from "@/lib/veil";
 import { useSolanaRpc } from "@/app/providers/SolanaProvider";
-import { buildExplorerTxUrl } from "@/lib/solana/rpc";
+import { buildExplorerTxUrl, buildExplorerAddressUrl } from "@/lib/solana/rpc";
+import { logSafe } from "@/lib/log";
 import { formatPrice, formatUsd, tokenToUsd, type PythPrices } from "@/lib/pyth/prices";
 import { usePools, type PoolView } from "@/lib/veil/usePools";
 import { WAD } from "@/lib/veil/constants";
@@ -24,6 +25,7 @@ import {
   shortAddr,
   estimateHF,
   formatHF,
+  parseTokenAmountToLamports,
 } from "./lib/format";
 import { getPoolType, getPoolIcon, getPoolColor, type PoolType } from "./lib/tokens";
 
@@ -591,7 +593,7 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
             {/* RPC */}
             <button onClick={onOpenRpc} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 999, border: "1px solid #e7e7ec", background: "white", fontSize: 12, color: "#5b5b66", fontWeight: 500, cursor: "pointer" }}>
               <span className="pulse-dot" style={{ width: 6, height: 6 }} />
-              <span className="rpc-btn-text">{preset === "mainnet" ? "Mainnet" : preset === "localnet" ? "Local" : preset === "custom" ? "Custom" : "Devnet"}</span>
+              <span className="rpc-btn-text">{preset === "mainnet" ? "Mainnet" : preset === "localnet" ? "Local" : "Devnet"}</span>
             </button>
 
             {/* Admin link - desktop */}
@@ -1054,7 +1056,11 @@ const PortfolioPoolRow = ({ row, fhe, isOpen, onToggle, explorerUrl, setModal, i
               </div>
               {txs.map((tx, i) => {
                 const txAmount = tx.amount && tx.amount !== "0" ? formatBigAmount(BigInt(tx.amount), dec) : null;
-                const actionColor: Record<string, string> = { deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a" };
+                const actionColor: Record<string, string> = {
+                  deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a",
+                  cross_borrow: "#0284c7", cross_repay: "#16a34a", cross_withdraw: "#7c3aed",
+                  cross_liquidate: "#dc2626", liquidate: "#dc2626",
+                };
 
                 return (
                   <div key={tx.signature} className="pos-chunk-grid" style={{ padding: "11px 14px", alignItems: "center", borderBottom: i < txs.length - 1 ? "1px solid #f7f7f9" : "none", fontSize: 13 }}>
@@ -1469,7 +1475,15 @@ const FlashView = ({ connected, fhe, pools, pythPrices }: { connected: boolean; 
               {status === "error" && errorMsg && (
                 <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "9px 12px", fontSize: 12, color: "#991b1b" }}>{errorMsg}</div>
               )}
-              <button disabled={!connected || !flashTokenAmt || !pool || ["building", "signing", "confirming"].includes(status)} onClick={() => { if (pool && flashTokenAmt > 0) { reset(); flashExecute(pool, BigInt(Math.round(flashTokenAmt * 10 ** (pool?.decimals ?? 9)))); } }} style={{ width: "100%", padding: "11px", borderRadius: 12, background: connected && flashTokenAmt ? "#0b0b10" : "#e7e7ec", color: connected && flashTokenAmt ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: connected && flashTokenAmt ? "pointer" : "not-allowed", transition: "all .2s" }}>
+              <button disabled={!connected || !flashTokenAmt || !pool || ["building", "signing", "confirming"].includes(status)} onClick={() => {
+                if (!pool || flashTokenAmt <= 0) return;
+                const lamports = flashInputMode === "token"
+                  ? parseTokenAmountToLamports(amount, pool.decimals)
+                  : parseTokenAmountToLamports(flashTokenAmt.toFixed(pool.decimals), pool.decimals);
+                if (!lamports || lamports <= 0n) return;
+                reset();
+                flashExecute(pool, lamports);
+              }} style={{ width: "100%", padding: "11px", borderRadius: 12, background: connected && flashTokenAmt ? "#0b0b10" : "#e7e7ec", color: connected && flashTokenAmt ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: connected && flashTokenAmt ? "pointer" : "not-allowed", transition: "all .2s" }}>
                 {!connected ? "Connect wallet" : status === "building" ? "Building…" : status === "signing" ? "Approve in wallet…" : status === "confirming" ? "Confirming…" : "Execute flash loan"}
               </button>
             </div>
@@ -1640,8 +1654,9 @@ const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; p
 const HISTORY_ACTION_COLOR: Record<string, string> = {
   deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a",
   liquidate: "#dc2626", flash: "#d97706", flash_borrow: "#6d28d9", flash_repay: "#059669",
-  init: "#0b0b10", update_pool: "#6b7280", pause: "#dc2626", resume: "#059669",
-  collect_fees: "#a16207", update_oracle: "#0891b2",
+  cross_borrow: "#0284c7", cross_withdraw: "#7c3aed", cross_repay: "#16a34a", cross_liquidate: "#dc2626",
+  init: "#0b0b10", init_position: "#0b0b10", update_pool: "#6b7280", pause: "#dc2626", resume: "#059669",
+  collect_fees: "#a16207", update_oracle: "#0891b2", set_pool_decimals: "#6b7280",
 };
 
 const formatTxAmount = (raw: string | null, pool: PoolView | undefined): string => {
@@ -1662,13 +1677,15 @@ const HISTORY_INITIAL_CAP = 200;
 
 const HISTORY_ACTIONS = [
   "deposit", "withdraw", "borrow", "repay", "liquidate",
+  "cross_borrow", "cross_withdraw", "cross_repay", "cross_liquidate",
   "flash", "flash_borrow", "flash_repay",
-  "init", "update_pool", "pause", "resume",
-  "collect_fees", "update_oracle",
+  "init", "init_position", "update_pool", "pause", "resume",
+  "collect_fees", "update_oracle", "set_pool_decimals",
 ] as const;
 
 const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView[] }) => {
   const { publicKey } = useWallet();
+  const { connection } = useConnection();
   const [txs, setTxs] = useState<TxLogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -1676,6 +1693,8 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
   const [error, setError] = useState<string | null>(null);
   const [capped, setCapped] = useState(false);
   const [fetchAll, setFetchAll] = useState(false);
+  const [fromChain, setFromChain] = useState(false);
+  const [chainLoading, setChainLoading] = useState(false);
   const rpc = useSolanaRpc();
 
   // Filters
@@ -1686,9 +1705,37 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
 
   const pageSize = fetchAll ? HISTORY_INITIAL_CAP : HISTORY_PAGE_SIZE;
 
+  const loadFromChain = useCallback(async () => {
+    if (!publicKey) return;
+    setChainLoading(true);
+    setError(null);
+    try {
+      const onchain = await fetchOnchainTxs(connection, publicKey, 100);
+      const rows = onchain.map((o) => ({
+        id: 0,
+        signature: o.signature,
+        wallet: o.wallet,
+        action: o.action,
+        pool_address: o.pool_address,
+        amount: o.amount,
+        status: o.status,
+        error_msg: o.error_msg,
+        created_at: o.created_at,
+      }));
+      setTxs(rows);
+      setTotal(rows.length);
+      setCapped(false);
+      setFromChain(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChainLoading(false);
+    }
+  }, [publicKey, connection]);
+
   const fetchTxs = useCallback((pg: number, from: string, to: string, action: string, pool: string, all: boolean) => {
     if (!publicKey) { setTxs([]); setTotal(0); setLoading(false); return; }
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setFromChain(false);
     const ps = pageSize;
     const params = new URLSearchParams({
       wallet: publicKey.toBase58(),
@@ -1704,12 +1751,21 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
     }
     if (action) params.set("action", action);
     if (pool) params.set("pool", pool);
+    const hasFilters = !!(from || to || action || pool);
     fetch(`/api/transactions?${params}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((d) => { setTxs(d.transactions ?? []); setTotal(d.total ?? 0); setCapped(d.capped ?? false); })
+      .then((d) => {
+        const rows = d.transactions ?? [];
+        setTxs(rows); setTotal(d.total ?? 0); setCapped(d.capped ?? false);
+        // Auto-fallback to chain when DB has nothing for this wallet and no
+        // filters narrow the view — covers fresh deploys / pre-whitelist gaps.
+        if (rows.length === 0 && !hasFilters && pg === 0) {
+          void loadFromChain();
+        }
+      })
       .catch((e) => { setTxs([]); setTotal(0); setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => setLoading(false));
-  }, [publicKey, pageSize]);
+  }, [publicKey, pageSize, loadFromChain]);
 
   useEffect(() => { fetchTxs(page, fromDate, toDate, actionFilter, poolFilter, fetchAll); }, [fetchTxs, page, fromDate, toDate, actionFilter, poolFilter, fetchAll]);
 
@@ -1731,7 +1787,10 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
       <div style={{ marginBottom: 16, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="section-header">Transaction History</div>
-          <div className="section-sub">{total > 0 ? `${total} transaction${total === 1 ? "" : "s"}` : "Your recent protocol interactions"}</div>
+          <div className="section-sub">
+            {total > 0 ? `${total} transaction${total === 1 ? "" : "s"}` : "Your recent protocol interactions"}
+            {fromChain && <span style={{ marginLeft: 8, fontSize: 11, color: "#a16207", background: "#fef3c7", padding: "1px 8px", borderRadius: 999 }}>from chain</span>}
+          </div>
         </div>
 
         {/* Filters */}
@@ -1777,8 +1836,10 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
       </div>
 
       <div className="glass-card" style={{ borderRadius: 18, overflow: "hidden" }}>
-        {loading ? (
-          <div style={{ padding: "48px 18px", textAlign: "center", color: "#6b7280", fontSize: 14 }}>Loading…</div>
+        {loading || chainLoading ? (
+          <div style={{ padding: "48px 18px", textAlign: "center", color: "#6b7280", fontSize: 14 }}>
+            {chainLoading ? "Reading on-chain history…" : "Loading…"}
+          </div>
         ) : error ? (
           <div style={{ padding: "24px 18px", textAlign: "center" }}>
             <div style={{ color: "#dc2626", marginBottom: 4, fontSize: 13 }}>Error: {error}</div>
@@ -1789,6 +1850,12 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
             <div className="empty-state-desc">
               {fromDate || toDate ? "Try adjusting the date range." : "Transactions sent from this dApp are logged here automatically."}
             </div>
+            {!fromDate && !toDate && !actionFilter && !poolFilter && (
+              <button
+                onClick={loadFromChain}
+                style={{ marginTop: 12, fontSize: 12, fontWeight: 600, padding: "6px 14px", borderRadius: 8, border: "1px solid #fbbf24", background: "#fef3c7", color: "#92400e", cursor: "pointer" }}
+              >Sync from chain</button>
+            )}
           </div>
         ) : (
           <>
@@ -1831,7 +1898,7 @@ const HistoryView = ({ connected, pools }: { connected: boolean; pools: PoolView
                             </div>
                           ) : tx.pool_address ? (
                             <a
-                              href={`https://explorer.solana.com/address/${tx.pool_address}${rpc.preset === "devnet" ? "?cluster=devnet" : rpc.preset === "mainnet" ? "" : `?cluster=custom&customUrl=${encodeURIComponent(rpc.endpoint)}`}`}
+                              href={buildExplorerAddressUrl(tx.pool_address, rpc)}
                               target="_blank" rel="noreferrer"
                               style={{ fontSize: 12, color: "#6d28d9", fontFamily: "var(--font-mono),monospace", textDecoration: "none" }}
                             >
@@ -2252,12 +2319,19 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
       return;
     }
 
-    // Convert the resolved token amount to lamports (base units)
-    const tokenStr = tokenAmount.toFixed(pool.decimals);
-    const [whole = "0", frac = ""] = tokenStr.split(".");
-    const fracPadded = frac.padEnd(pool.decimals, "0").slice(0, pool.decimals);
-    const lamports = BigInt(whole + fracPadded);
-    if (lamports <= 0n) return;
+    // Convert the resolved token amount to lamports (base units).
+    // When the user types in token mode we parse their string directly to
+    // avoid float precision loss (M2). USD-mode requires a price-divide so
+    // it has to round-trip through Number — that path is only reachable
+    // when a Pyth price feed is live.
+    let lamports: bigint | null;
+    if (inputMode === "token") {
+      lamports = parseTokenAmountToLamports(amount, pool.decimals);
+    } else {
+      const tokenStr = tokenAmount.toFixed(pool.decimals);
+      lamports = parseTokenAmountToLamports(tokenStr, pool.decimals);
+    }
+    if (!lamports || lamports <= 0n) return;
 
     // For withdraw: compute shares via bigint math to avoid float precision issues
     let withdrawShares: bigint | undefined;
@@ -2433,7 +2507,7 @@ export default function DAppPage() {
   useEffect(() => {
     if (!publicKey) { setUserCollateralPools(new Set()); return; }
     fetch(`/api/positions/${encodeURIComponent(publicKey.toBase58())}/detail`, { cache: "no-store" })
-      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((d: { positions: DetailPosition[] }) => {
         const collPools = new Set<string>();
         for (const p of d.positions ?? []) {
@@ -2441,7 +2515,7 @@ export default function DAppPage() {
         }
         setUserCollateralPools(collPools);
       })
-      .catch(() => {});
+      .catch((err) => logSafe("warn", "veil.collateral.fetch_failed", { err: String(err) }));
   }, [publicKey, portfolioRefreshKey]);
 
   // Sync view from localStorage after hydration to avoid SSR mismatch
