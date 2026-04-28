@@ -411,9 +411,22 @@ details[open] .faq-caret {
 /* Layout helpers */
 .split-layout {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 1fr;
   gap: 16px;
   align-items: start;
+}
+
+.detail-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid #f0f0f3;
+}
+.detail-split-chart {
+  padding: 16px 18px;
+  border-right: 1px solid #f0f0f3;
+}
+.detail-split-data {
+  padding: 16px 18px;
 }
 
 /* ── Admin page ────────────────────────────────────────────────────────────── */
@@ -478,15 +491,53 @@ details[open] .faq-caret {
   touch-action: manipulation;
 }
 
+/* ── Portfolio layout ──────────────────────────────────────────────────────── */
+.portfolio-layout {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+  align-items: start;
+}
+.portfolio-sidebar {
+  position: sticky;
+  top: 82px;
+}
+
+/* Position row grid — 7 cols: Asset | Position | APY | Interest | LTV | Health | Actions */
+.pos-row-grid {
+  display: grid;
+  grid-template-columns: 2fr 1.3fr 0.85fr 1.3fr 0.7fr 0.7fr 100px;
+  align-items: center;
+}
+/* Expanded tx detail grid — 5 cols: Transaction | Action | Amount | Timestamp | View */
+.pos-chunk-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 0.8fr 1.2fr 1.3fr 80px;
+  gap: 10px;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .metrics-row { grid-template-columns: repeat(2, 1fr); }
   .split-layout { grid-template-columns: 1fr; }
+  .detail-split { grid-template-columns: 1fr; }
+  .detail-split-chart { border-right: none; border-bottom: 1px solid #f0f0f3; }
   .dapp-nav-actions .nav-pill { display: none; }
-  .pool-table th:nth-child(5),
-  .pool-table td:nth-child(5),
-  .pool-table th:nth-child(6),
-  .pool-table td:nth-child(6) { display: none; }
+  /* Markets table: hide Total Borrow + Borrow APY */
+  .pool-table:not(.history-table) th:nth-child(5),
+  .pool-table:not(.history-table) td:nth-child(5),
+  .pool-table:not(.history-table) th:nth-child(6),
+  .pool-table:not(.history-table) td:nth-child(6) { display: none; }
+  /* History table: hide Transaction column */
+  .history-table th:nth-child(6),
+  .history-table td:nth-child(6) { display: none; }
+
+  /* Portfolio: stack sidebar below, hide Interest + LTV cols */
+  .portfolio-layout { grid-template-columns: 1fr; }
+  .portfolio-sidebar { position: static; }
+  .pos-row-grid > :nth-child(4),
+  .pos-row-grid > :nth-child(5) { display: none; }
+  .pos-row-grid { grid-template-columns: 2fr 1.3fr 0.85fr 0.7fr 100px; }
 }
 
 @media (max-width: 768px) {
@@ -502,15 +553,32 @@ details[open] .faq-caret {
   /* Nav simplification */
   .dapp-nav-inner { border-radius: 14px; height: 48px; }
 
-  .pool-table th:nth-child(4),
-  .pool-table td:nth-child(4),
-  .pool-table th:nth-child(5),
-  .pool-table td:nth-child(5),
-  .pool-table th:nth-child(6),
-  .pool-table td:nth-child(6) { display: none; }
+  /* Markets table */
+  .pool-table:not(.history-table) th:nth-child(4),
+  .pool-table:not(.history-table) td:nth-child(4),
+  .pool-table:not(.history-table) th:nth-child(5),
+  .pool-table:not(.history-table) td:nth-child(5),
+  .pool-table:not(.history-table) th:nth-child(6),
+  .pool-table:not(.history-table) td:nth-child(6) { display: none; }
+  /* History table: hide Amount + Status */
+  .history-table th:nth-child(4),
+  .history-table td:nth-child(4),
+  .history-table th:nth-child(5),
+  .history-table td:nth-child(5),
+  .history-table th:nth-child(6),
+  .history-table td:nth-child(6) { display: none; }
   .flash-grid { grid-template-columns: 1fr !important; }
-  .portfolio-grid { grid-template-columns: 1fr !important; }
   .split-layout .glass-card { position: static !important; }
+
+  /* Portfolio: also hide Health col, shrink actions */
+  .pos-row-grid > :nth-child(4),
+  .pos-row-grid > :nth-child(5),
+  .pos-row-grid > :nth-child(6) { display: none; }
+  .pos-row-grid { grid-template-columns: 2fr 1.2fr 0.8fr 100px; }
+  /* Expanded tx detail: hide Amount + Timestamp */
+  .pos-chunk-grid > :nth-child(3),
+  .pos-chunk-grid > :nth-child(4) { display: none; }
+  .pos-chunk-grid { grid-template-columns: 1.5fr 0.8fr 80px; }
 }
 
 @media (max-width: 480px) {
@@ -518,14 +586,26 @@ details[open] .faq-caret {
   .dapp-nav-inner { padding: 0 6px 0 12px; height: 44px; border-radius: 12px; }
   .metrics-row { grid-template-columns: 1fr; gap: 8px; }
   .dapp-main { padding: 8px 10px 32px; padding-bottom: 80px; }
-  .pool-table th:nth-child(3),
-  .pool-table td:nth-child(3),
-  .pool-table th:nth-child(4),
-  .pool-table td:nth-child(4),
-  .pool-table th:nth-child(5),
-  .pool-table td:nth-child(5),
-  .pool-table th:nth-child(6),
-  .pool-table td:nth-child(6) { display: none; }
+  /* Markets table */
+  .pool-table:not(.history-table) th:nth-child(3),
+  .pool-table:not(.history-table) td:nth-child(3),
+  .pool-table:not(.history-table) th:nth-child(4),
+  .pool-table:not(.history-table) td:nth-child(4),
+  .pool-table:not(.history-table) th:nth-child(5),
+  .pool-table:not(.history-table) td:nth-child(5),
+  .pool-table:not(.history-table) th:nth-child(6),
+  .pool-table:not(.history-table) td:nth-child(6) { display: none; }
+  /* History table: hide Time + Pool columns too */
+  .history-table th:nth-child(1),
+  .history-table td:nth-child(1),
+  .history-table th:nth-child(3),
+  .history-table td:nth-child(3),
+  .history-table th:nth-child(4),
+  .history-table td:nth-child(4),
+  .history-table th:nth-child(5),
+  .history-table td:nth-child(5),
+  .history-table th:nth-child(6),
+  .history-table td:nth-child(6) { display: none; }
   .pool-table th:first-child,
   .pool-table td:first-child { padding-left: 12px; }
   .metric-card { padding: 12px 14px; }
@@ -533,4 +613,11 @@ details[open] .faq-caret {
   .modal-card { margin: 10px; max-width: calc(100vw - 20px); padding: 18px; }
   .glass-card { border-radius: 14px !important; }
   .dapp-nav-actions .rpc-btn-text { display: none; }
+
+  /* Portfolio: keep only Asset + APY + action button */
+  .pos-row-grid > :nth-child(2),
+  .pos-row-grid > :nth-child(4),
+  .pos-row-grid > :nth-child(5),
+  .pos-row-grid > :nth-child(6) { display: none; }
+  .pos-row-grid { grid-template-columns: 1fr 0.6fr 90px; padding-left: 12px !important; padding-right: 12px !important; }
 }

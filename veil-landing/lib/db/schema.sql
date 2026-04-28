@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS tx_log (
 );
 CREATE INDEX IF NOT EXISTS idx_tx_log_wallet ON tx_log(wallet, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_log_pool ON tx_log(pool_address, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tx_log_action ON tx_log(action, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id           BIGSERIAL PRIMARY KEY,

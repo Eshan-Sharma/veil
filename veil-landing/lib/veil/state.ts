@@ -51,26 +51,32 @@ export type UserPosition = {
   // _pad_end [129..144]
 };
 
-function readU64LE(buf: Buffer, offset: number): bigint {
-  return buf.readBigUInt64LE(offset);
+// Use DataView for browser + Node compatibility (Buffer.readBigUInt64LE is Node-only)
+function toDataView(buf: Buffer | Uint8Array): DataView {
+  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
-function readI64LE(buf: Buffer, offset: number): bigint {
-  return buf.readBigInt64LE(offset);
+function readU64LE(buf: Buffer | Uint8Array, offset: number): bigint {
+  return toDataView(buf).getBigUint64(offset, true);
 }
 
-function readU128LE(buf: Buffer, offset: number): bigint {
-  const lo = buf.readBigUInt64LE(offset);
-  const hi = buf.readBigUInt64LE(offset + 8);
+function readI64LE(buf: Buffer | Uint8Array, offset: number): bigint {
+  return toDataView(buf).getBigInt64(offset, true);
+}
+
+function readU128LE(buf: Buffer | Uint8Array, offset: number): bigint {
+  const dv = toDataView(buf);
+  const lo = dv.getBigUint64(offset, true);
+  const hi = dv.getBigUint64(offset + 8, true);
 
   return (hi << 64n) | lo;
 }
 
-function readI32LE(buf: Buffer, offset: number): number {
-  return buf.readInt32LE(offset);
+function readI32LE(buf: Buffer | Uint8Array, offset: number): number {
+  return toDataView(buf).getInt32(offset, true);
 }
 
-export function decodeLendingPool(data: Buffer): LendingPool {
+export function decodeLendingPool(data: Buffer | Uint8Array): LendingPool {
   if (data.length < POOL_SIZE) {
     throw new Error(`Expected ${POOL_SIZE} bytes, got ${data.length}`);
   }
@@ -108,7 +114,7 @@ export function decodeLendingPool(data: Buffer): LendingPool {
   };
 }
 
-export function decodeUserPosition(data: Buffer): UserPosition {
+export function decodeUserPosition(data: Buffer | Uint8Array): UserPosition {
   if (data.length < POSITION_SIZE) {
     throw new Error(`Expected ${POSITION_SIZE} bytes, got ${data.length}`);
   }
