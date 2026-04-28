@@ -41,6 +41,25 @@ export function formatTokenAmount(v: bigint, decimals: number, symbol: string): 
   return `${formatBigAmount(v, decimals)} ${symbol}`;
 }
 
+// Parse a user-entered decimal token string ("12.345") to base-unit lamports
+// without going through Number/parseFloat. Returns null on invalid or zero
+// input. Truncates fractional digits beyond `decimals` rather than rounding,
+// so the on-chain value is always ≤ what the user typed (M2).
+export function parseTokenAmountToLamports(input: string, decimals: number): bigint | null {
+  const s = input.trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const [whole, frac = ""] = s.split(".");
+  const fracPadded = frac.padEnd(decimals, "0").slice(0, decimals);
+  const combined = (whole + fracPadded).replace(/^0+(?=\d)/, "");
+  if (combined === "" || combined === "0") return null;
+  try {
+    const v = BigInt(combined);
+    return v > 0n ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export function formatBigInt(s: string): string {
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }

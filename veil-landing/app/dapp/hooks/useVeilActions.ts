@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
-import { useSolanaRpc } from "@/app/providers/SolanaProvider";
+import { logSafe } from "@/lib/log";
 import {
   depositIx,
   withdrawIx,
@@ -33,27 +33,26 @@ const logTx = (p: { signature: string; wallet: string; action: string; pool_addr
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...p, amount: p.amount?.toString() }),
-  }).catch(() => {});
+  }).catch((err) => logSafe("warn", "veil.tx.log_failed", { err: String(err) }));
 };
 
-const syncPool = (poolAddress: string, rpc: string): Promise<void> =>
+const syncPool = (poolAddress: string): Promise<void> =>
   fetch("/api/pools/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pool_address: poolAddress, rpc }),
-  }).then(() => {}).catch(() => {});
+    body: JSON.stringify({ pool_address: poolAddress }),
+  }).then(() => {}).catch((err) => logSafe("warn", "veil.pool.sync_failed", { pool: poolAddress, err: String(err) }));
 
-const syncPosition = (poolAddress: string, user: string, rpc: string): Promise<void> =>
+const syncPosition = (poolAddress: string, user: string): Promise<void> =>
   fetch("/api/positions/sync", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pool_address: poolAddress, user, rpc }),
-  }).then(() => {}).catch(() => {});
+    body: JSON.stringify({ pool_address: poolAddress, user }),
+  }).then(() => {}).catch((err) => logSafe("warn", "veil.position.sync_failed", { pool: poolAddress, user, err: String(err) }));
 
 export const useVeilActions = () => {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
-  const { endpoint } = useSolanaRpc();
   const [status, setStatus] = useState<TxStatus>("idle");
   const [txSig, setTxSig] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -81,14 +80,14 @@ export const useVeilActions = () => {
       try {
         const sim = await connection.simulateTransaction(tx);
         if (sim.value.err) {
-          console.error(`[veil] ${meta.action} simulation failed:`, sim.value.err, sim.value.logs);
+          logSafe("error", "veil.tx.sim_failed", { action: meta.action, err: sim.value.err, logs: sim.value.logs });
           const progErr = sim.value.logs?.find((l) => l.includes("Error") || l.includes("failed"));
           throw new Error(progErr ?? `Simulation failed: ${JSON.stringify(sim.value.err)}`);
         }
       } catch (simErr) {
         // Re-throw program errors, ignore encoding/network errors from unsigned tx
         if (simErr instanceof Error && simErr.message.includes("failed")) throw simErr;
-        console.warn(`[veil] simulation skipped:`, simErr);
+        logSafe("warn", "veil.tx.sim_skipped", { err: String(simErr) });
       }
 
       setStatus("signing");
@@ -100,8 +99,8 @@ export const useVeilActions = () => {
               pool_address: meta.poolAddress, amount: meta.amount, status: "confirmed" });
       // Sync on-chain state to DB before signalling success (so portfolio refetch sees fresh data)
       await Promise.all([
-        syncPool(meta.poolAddress, endpoint),
-        syncPosition(meta.poolAddress, publicKey.toBase58(), endpoint),
+        syncPool(meta.poolAddress),
+        syncPosition(meta.poolAddress, publicKey.toBase58()),
       ]);
       setStatus("success");
     } catch (e: unknown) {
@@ -111,11 +110,11 @@ export const useVeilActions = () => {
       const err = e as Record<string, unknown>;
       const logs = (err?.logs ?? (err?.cause as Record<string, unknown>)?.logs) as string[] | undefined;
       if (logs?.length) {
-        console.error(`[veil] ${meta.action} failed — program logs:`, logs);
+        logSafe("error", "veil.tx.failed_with_logs", { action: meta.action, logs });
         const progErr = logs.find((l: string) => l.includes("Error") || l.includes("failed"));
         setErrorMsg(progErr ? `${msg}: ${progErr}` : msg);
       } else {
-        console.error(`[veil] ${meta.action} failed:`, e);
+        logSafe("error", "veil.tx.failed", { action: meta.action, err: String(e) });
         setErrorMsg(msg);
       }
     }
@@ -132,7 +131,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const withdraw = useCallback(
@@ -147,7 +146,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const borrow = useCallback(
@@ -162,7 +161,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const repay = useCallback(
@@ -176,7 +175,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const liquidate = useCallback(
@@ -191,7 +190,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const flashExecute = useCallback(
@@ -215,14 +214,14 @@ export const useVeilActions = () => {
         setTxSig(sig);
         logTx({ signature: sig, wallet: publicKey.toBase58(), action: "flash",
                 pool_address: pool.poolAddress.toBase58(), amount, status: "confirmed" });
-        syncPool(pool.poolAddress.toBase58(), endpoint);
+        void syncPool(pool.poolAddress.toBase58());
       } catch (e: unknown) {
         setStatus("error");
         setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const crossBorrow = useCallback(
@@ -270,7 +269,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const crossWithdraw = useCallback(
@@ -291,7 +290,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const crossRepay = useCallback(
@@ -305,7 +304,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   const crossLiquidate = useCallback(
@@ -339,7 +338,7 @@ export const useVeilActions = () => {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [publicKey, connection, endpoint, sendTransaction]
+    [publicKey, connection, sendTransaction]
   );
 
   return {

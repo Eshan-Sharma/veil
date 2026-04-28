@@ -3,3 +3,4 @@ export * from "./pda";
 export * from "./state";
 export * from "./instructions";
 export * from "./initialize";
+export * from "./onchainTxs";
