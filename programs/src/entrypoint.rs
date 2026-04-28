@@ -9,9 +9,9 @@ use pinocchio::nostd_panic_handler;
 
 use crate::instructions::{
     Borrow, CollectFees, CrossBorrow, CrossLiquidate, CrossRepay, CrossWithdraw, Deposit,
-    EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister, IkaRelease, IkaSign, Initialize,
-    Liquidate, PausePool, PrivateBorrow, PrivateDeposit, PrivateRepay, PrivateWithdraw,
-    Repay, ResumePool, SetPoolDecimals, UpdateOraclePrice, UpdatePool, Withdraw,
+    EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister, IkaRelease, IkaSign, InitPosition,
+    Initialize, Liquidate, PausePool, PrivateBorrow, PrivateDeposit, PrivateRepay,
+    PrivateWithdraw, Repay, ResumePool, SetPoolDecimals, UpdateOraclePrice, UpdatePool, Withdraw,
 };
 #[cfg(feature = "testing")]
 use crate::instructions::MockFees;
@@ -58,6 +58,7 @@ pub fn process_instruction(
         CrossWithdraw::DISCRIMINATOR     => CrossWithdraw::from_data(rest)?.process(program_id, accounts),
         CrossRepay::DISCRIMINATOR        => CrossRepay::from_data(rest)?.process(program_id, accounts),
         CrossLiquidate::DISCRIMINATOR    => CrossLiquidate::from_data(rest)?.process(program_id, accounts),
+        InitPosition::DISCRIMINATOR      => InitPosition::from_data(rest)?.process(program_id, accounts),
         #[cfg(feature = "testing")]
         MockFees::DISCRIMINATOR          => MockFees::process(program_id, accounts),
         #[cfg(feature = "testing")]
