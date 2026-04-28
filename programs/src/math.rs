@@ -92,12 +92,23 @@ pub fn wad_div(a: u128, b: u128) -> Result<u128, ProgramError> {
             let rem_scaled = match remainder.checked_mul(WAD) {
                 Some(v) => v / b,
                 None => {
-                    // Still overflows — scale down remainder further
-                    let half_wad = WAD / 2;
-                    let part1 = remainder.checked_mul(half_wad)
+                    // Still overflows — split WAD into sqrt(WAD)² so
+                    // intermediate products stay within u128.
+                    // remainder × WAD / b
+                    //   = (remainder × S / b) × S + (remainder × S % b) × S / b
+                    // where S = 1e9 = sqrt(WAD).
+                    const SQRT_WAD: u128 = 1_000_000_000;
+                    let step = remainder.checked_mul(SQRT_WAD)
+                        .ok_or(ProgramError::ArithmeticOverflow)?;
+                    let q2 = step / b;
+                    let r2 = step % b;
+                    let part_a = q2.checked_mul(SQRT_WAD)
+                        .ok_or(ProgramError::ArithmeticOverflow)?;
+                    let part_b = r2.checked_mul(SQRT_WAD)
                         .ok_or(ProgramError::ArithmeticOverflow)?
                         / b;
-                    part1 * 2
+                    part_a.checked_add(part_b)
+                        .ok_or(ProgramError::ArithmeticOverflow)?
                 }
             };
             main.checked_add(rem_scaled)
@@ -492,6 +503,35 @@ mod tests {
     fn wad_div_small_values() {
         // 500 ÷ 1_000 (raw token amounts, not WAD-scaled)
         assert_eq!(wad_div(500, 1_000).unwrap(), WAD / 2);
+    }
+
+    #[test]
+    fn wad_div_large_cross_health_factor() {
+        // Real scenario: $42,500 liq-weighted collateral / $12,140 total debt
+        // Both WAD-scaled → a = 42500e18, b = 12140e18
+        // Expected HF ≈ 3.50 → 3.5 × WAD
+        let collateral = 42_500u128 * WAD;
+        let debt = 12_140u128 * WAD;
+        let hf = wad_div(collateral, debt).unwrap();
+        // 42500/12140 ≈ 3.5008...
+        assert!(hf > 3 * WAD, "HF should be > 3.0, got {}", hf);
+        assert!(hf < 4 * WAD, "HF should be < 4.0, got {}", hf);
+        // Check precision: 42500/12140 = 3.500823... → within 0.001 WAD
+        let expected = 3_500_823_723_228_995_057u128; // 42500e18 * 1e18 / 12140e18
+        let diff = if hf > expected { hf - expected } else { expected - hf };
+        assert!(diff < WAD / 1_000, "precision loss too large: diff={}", diff);
+    }
+
+    #[test]
+    fn wad_div_50k_vs_140() {
+        // $50,000 collateral / $140 debt → HF ≈ 357
+        let a = 50_000u128 * WAD;
+        let b = 140u128 * WAD;
+        let result = wad_div(a, b).unwrap();
+        // 50000/140 ≈ 357.142857...
+        let expected_approx = 357 * WAD;
+        assert!(result > expected_approx, "should be > 357 WAD");
+        assert!(result < 358 * WAD, "should be < 358 WAD");
     }
 
     // ── utilization_rate ─────────────────────────────────────────────────────
@@ -892,6 +932,21 @@ mod tests {
         // $80 weighted collateral, $100 debt → HF = 0.8
         let hf = cross_health_factor(80 * WAD, 100 * WAD).unwrap();
         assert_eq!(hf, WAD * 80 / 100);
+    }
+
+    #[test]
+    fn cross_hf_large_collateral_small_debt() {
+        // Real scenario: $42,500 liq-weighted vs $12,140 debt (both WAD-scaled)
+        // This previously overflowed in wad_div's fallback path
+        let hf = cross_health_factor(42_500 * WAD, 12_140 * WAD).unwrap();
+        assert!(hf > 3 * WAD && hf < 4 * WAD, "HF ≈ 3.50, got {}", hf);
+    }
+
+    #[test]
+    fn cross_hf_50k_collateral_140_debt() {
+        // $50k collateral, $140 debt → HF ≈ 357
+        let hf = cross_health_factor(50_000 * WAD, 140 * WAD).unwrap();
+        assert!(hf > 357 * WAD && hf < 358 * WAD);
     }
 
     // ── cross_max_borrowable_usd ────────────────────────────────────────────
