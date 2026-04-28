@@ -45,6 +45,12 @@ impl SetPoolDecimals {
         if &pool.token_mint != accounts[2].address() {
             return Err(ProgramError::InvalidAccountData);
         }
+        // Re-decimal-ing a live pool would silently re-value every existing
+        // deposit and debt (token_to_usd_wad uses token_decimals as an
+        // exponent). Only allow when the pool is fully empty.
+        if pool.total_deposits != 0 || pool.total_borrows != 0 || pool.accumulated_fees != 0 {
+            return Err(LendError::PoolNotEmpty.into());
+        }
 
         // Read decimals from the SPL token mint (offset 44).
         if accounts[2].data_len() < 82 {

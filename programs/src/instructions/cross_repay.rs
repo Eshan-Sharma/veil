@@ -28,7 +28,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct CrossRepay {
@@ -36,7 +36,7 @@ pub struct CrossRepay {
 }
 
 #[inline(always)]
-fn compute_repay(
+pub(crate) fn compute_repay(
     pool: &LendingPool,
     pos: &UserPosition,
     amount: u64,
@@ -77,9 +77,14 @@ impl CrossRepay {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?;
-        check_program_owner(&accounts[4], program_id)?;
+        // ── Owner / identity checks ──────────────────────────────────────
+        check_program_owner(&accounts[3], program_id)?; // pool
+        check_program_owner(&accounts[4], program_id)?; // user_position
+        check_token_program(&accounts[5])?;
+        {
+            let pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
+        }
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
@@ -107,20 +112,29 @@ impl CrossRepay {
         }
 
         // ── Update pool totals ────────────────────────────────────────────
+        // Depositor claims are unchanged on a repay; interest already grew
+        // total_deposits via accrue_interest.
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             pool.total_borrows = pool.total_borrows.saturating_sub(repay_amount);
-            pool.total_deposits = pool.total_deposits.saturating_add(repay_amount);
         }
 
         // ── Clear cross_collateral flags if fully repaid ─────────────────
         if new_debt == 0 {
+            {
+                let pos = UserPosition::from_account_mut(&accounts[4])?;
+                pos.cross_collateral = 0;
+                pos.cross_set_id = 0;
+                pos.cross_count = 0;
+            }
             let trailing = &accounts[6..];
             for acc in trailing {
                 check_program_owner(acc, program_id)?;
                 let coll_pos = UserPosition::from_account_mut(acc)?;
                 if &coll_pos.owner == accounts[0].address() && coll_pos.cross_collateral != 0 {
                     coll_pos.cross_collateral = 0;
+                    coll_pos.cross_set_id = 0;
+                    coll_pos.cross_count = 0;
                 }
             }
         }
@@ -129,94 +143,3 @@ impl CrossRepay {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::WAD;
-
-    fn pool() -> LendingPool {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        pool.discriminator = LendingPool::DISCRIMINATOR;
-        pool.borrow_index = WAD;
-        pool.supply_index = WAD;
-        pool
-    }
-
-    fn position(borrow_principal: u64) -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.borrow_principal = borrow_principal;
-        pos.deposit_index_snapshot = WAD;
-        pos.borrow_index_snapshot = WAD;
-        pos
-    }
-
-    #[test]
-    fn compute_repay_rejects_no_debt() {
-        let p = pool();
-        let pos = position(0);
-        assert_eq!(compute_repay(&p, &pos, 100), Err(LendError::NoBorrow.into()));
-    }
-
-    #[test]
-    fn compute_repay_caps_at_total_debt() {
-        let p = pool();
-        let pos = position(500);
-        let (repay, new_debt, _) = compute_repay(&p, &pos, 1_000).unwrap();
-        assert_eq!(repay, 500);
-        assert_eq!(new_debt, 0);
-    }
-
-    #[test]
-    fn compute_repay_partial() {
-        let p = pool();
-        let pos = position(1_000);
-        let (repay, new_debt, _) = compute_repay(&p, &pos, 400).unwrap();
-        assert_eq!(repay, 400);
-        assert_eq!(new_debt, 600);
-    }
-
-    // ── Positive: repay exact debt ──────────────────────────────────────
-
-    #[test]
-    fn compute_repay_exact() {
-        let p = pool();
-        let pos = position(1_000);
-        let (repay, new_debt, _) = compute_repay(&p, &pos, 1_000).unwrap();
-        assert_eq!(repay, 1_000);
-        assert_eq!(new_debt, 0);
-    }
-
-    // ── Positive: repay with accrued interest ───────────────────────────
-
-    #[test]
-    fn compute_repay_with_accrued_interest() {
-        let mut p = pool();
-        p.borrow_index = WAD + WAD / 10; // 1.1x (10% interest accrued)
-        let pos = position(1_000); // principal = 1000, actual debt = 1100
-        let (repay, new_debt, idx) = compute_repay(&p, &pos, 2_000).unwrap();
-        assert_eq!(repay, 1_100); // capped at actual debt
-        assert_eq!(new_debt, 0);
-        assert_eq!(idx, WAD + WAD / 10);
-    }
-
-    // ── Negative: zero principal ────────────────────────────────────────
-
-    #[test]
-    fn compute_repay_zero_principal_rejected() {
-        let p = pool();
-        let pos = position(0);
-        assert_eq!(compute_repay(&p, &pos, 100), Err(LendError::NoBorrow.into()));
-    }
-
-    // ── Positive: borrow index snapshot updated ─────────────────────────
-
-    #[test]
-    fn compute_repay_returns_current_borrow_index() {
-        let mut p = pool();
-        p.borrow_index = WAD * 2; // double
-        let pos = position(500); // debt = 500 * 2 = 1000
-        let (_, _, idx) = compute_repay(&p, &pos, 500).unwrap();
-        assert_eq!(idx, WAD * 2);
-    }
-}

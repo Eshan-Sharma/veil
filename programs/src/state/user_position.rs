@@ -10,12 +10,13 @@ Layout (repr C, 144 bytes):
 |  40    |  32  | pool                    |
 |  72    |   8  | deposit_shares          |
 |  80    |   8  | borrow_principal        |
-|  88    |   8  | _pad0                   |
+|  88    |   8  | cross_set_id            |
 |  96    |  16  | deposit_index_snapshot  |
 | 112    |  16  | borrow_index_snapshot   |
 | 128    |   1  | bump                    |
 | 129    |   1  | cross_collateral        |
-| 130    |  14  | _pad_end                |
+| 130    |   1  | cross_count             |
+| 131    |  13  | _pad_end                |
 | 144    |      | (end)                   |
 */
 
@@ -42,7 +43,11 @@ pub struct UserPosition {
     /// Current balance = borrow_principal × currentBorrowIndex / borrow_index_snapshot
     pub borrow_principal: u64,
 
-    pub _pad0: u64,
+    /// Identifier shared across every position participating in the same
+    /// cross-collateral arrangement. 0 when the position is not cross-linked.
+    /// Used to defeat selective-omission and substitution attacks: every
+    /// position passed to a cross-* instruction must share the same id.
+    pub cross_set_id: u64,
 
     // ── Index snapshots (WAD) ─────────────────────────────────────────────
     pub deposit_index_snapshot: u128,
@@ -52,7 +57,11 @@ pub struct UserPosition {
     /// Non-zero when this position is used as collateral for a cross-pool borrow.
     /// Forces withdrawal through CrossWithdraw (which checks global HF).
     pub cross_collateral: u8,
-    pub _pad_end: [u8; 14],
+    /// Total number of positions in the cross-collateral arrangement
+    /// (including this one). cross-* instructions reject calls where the
+    /// number of supplied positions does not equal this value.
+    pub cross_count: u8,
+    pub _pad_end: [u8; 13],
 }
 
 impl UserPosition {
@@ -121,78 +130,5 @@ impl UserPosition {
             return Err(ProgramError::InvalidAccountData);
         }
         Ok(())
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::WAD;
-
-    fn default_position() -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.deposit_index_snapshot = WAD;
-        pos.borrow_index_snapshot = WAD;
-        pos
-    }
-
-    #[test]
-    fn size_matches_layout() {
-        assert_eq!(core::mem::size_of::<UserPosition>(), UserPosition::SIZE);
-    }
-
-    #[test]
-    fn discriminator_is_correct() {
-        assert_eq!(UserPosition::DISCRIMINATOR, *b"VEILPOS!");
-    }
-
-    #[test]
-    fn default_position_zero_shares_and_debt() {
-        let pos = default_position();
-        assert_eq!(pos.deposit_shares, 0);
-        assert_eq!(pos.borrow_principal, 0);
-    }
-
-    #[test]
-    fn default_position_index_snapshots_at_wad() {
-        let pos = default_position();
-        assert_eq!(pos.deposit_index_snapshot, WAD);
-        assert_eq!(pos.borrow_index_snapshot, WAD);
-    }
-
-    #[test]
-    fn deposit_shares_accumulate() {
-        let mut pos = default_position();
-        pos.deposit_shares = pos.deposit_shares.saturating_add(1_000);
-        pos.deposit_shares = pos.deposit_shares.saturating_add(2_000);
-        assert_eq!(pos.deposit_shares, 3_000);
-    }
-
-    #[test]
-    fn borrow_principal_can_be_updated() {
-        let mut pos = default_position();
-        pos.borrow_principal = 500_000;
-        assert_eq!(pos.borrow_principal, 500_000);
-    }
-
-    #[test]
-    fn deposit_shares_saturating_sub_no_underflow() {
-        let mut pos = default_position();
-        pos.deposit_shares = 100;
-        pos.deposit_shares = pos.deposit_shares.saturating_sub(200);
-        assert_eq!(pos.deposit_shares, 0, "saturating_sub must not underflow");
-    }
-
-    #[test]
-    fn borrow_principal_repay_to_zero() {
-        let mut pos = default_position();
-        pos.borrow_principal = 1_000;
-        let debt = pos.borrow_principal;
-        pos.borrow_principal = debt.saturating_sub(debt); // full repay
-        assert_eq!(pos.borrow_principal, 0);
     }
 }

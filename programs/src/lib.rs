@@ -8,3 +8,6 @@ pub mod pyth;
 pub mod state;
 pub mod instructions;
 pub mod entrypoint;
+
+#[cfg(test)]
+mod unit_tests;

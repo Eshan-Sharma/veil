@@ -57,12 +57,38 @@ pub enum LendError {
     OraclePriceStale,
     /// Provided price feed does not match the one anchored to the pool.
     OraclePriceFeedMismatch,
-    /// Pyth confidence interval exceeds 2 % of price — data too uncertain.
+    /// Pyth confidence interval exceeds 1 % of price — data too uncertain.
     OracleConfTooWide,
     /// Position is used as cross-collateral; use CrossWithdraw instead.
     CrossCollateralActive,
     /// Pool has no oracle anchored — cannot do cross-collateral operations.
     OracleNotAnchored,
+    /// Supplied vault account does not match the one anchored to the pool.
+    InvalidVault,
+    /// Supplied token program is neither SPL Token nor Token-2022.
+    InvalidTokenProgram,
+    /// Number of cross-collateral positions provided does not match the
+    /// pool's recorded count for the user (selective omission attack).
+    CrossPositionCountMismatch,
+    /// A position passed as cross-collateral was already counted in this
+    /// instruction (duplicate position attack).
+    DuplicateCrossPosition,
+    /// Pool has open deposits or borrows; the requested admin change would
+    /// retroactively re-value existing balances.
+    PoolNotEmpty,
+    /// Provided parameter is outside the allowed safety bounds.
+    ParameterOutOfBounds,
+    /// Liquidator is the same wallet as the position owner — self-liquidation
+    /// is forbidden (it lets the borrower preempt other liquidators and reset
+    /// their position state at will).
+    SelfLiquidation,
+    /// dWallet still has outstanding borrows; cannot be released.
+    OutstandingDebt,
+    /// Caller does not match the hardcoded admin authorised for testing-only
+    /// instructions (`MockOracle`, `MockFees`).
+    NotMockAdmin,
+    /// FlashRepay was not found in the same transaction as FlashBorrow.
+    FlashRepayMissing,
 }
 
 impl From<LendError> for ProgramError {

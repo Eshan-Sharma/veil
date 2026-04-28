@@ -70,8 +70,8 @@ pub const CPI_AUTHORITY_SEED: &[u8] = b"__ika_cpi_authority";
 pub const COORDINATOR_SEED: &[u8] = b"dwallet_coordinator";
 
 // ── Discriminators ────────────────────────────────────────────────────────────
-const IX_APPROVE_MESSAGE:  u8 = 8;
-const IX_TRANSFER_DWALLET: u8 = 24;
+pub(crate) const IX_APPROVE_MESSAGE:  u8 = 8;
+pub(crate) const IX_TRANSFER_DWALLET: u8 = 24;
 
 // ── approve_message ───────────────────────────────────────────────────────────
 
@@ -211,24 +211,3 @@ pub fn transfer_dwallet(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ika_program_id_is_32_bytes() {
-        assert_eq!(IKA_PROGRAM_ID.as_ref().len(), 32);
-    }
-
-    #[test]
-    fn cpi_authority_seed_is_correct() {
-        assert_eq!(CPI_AUTHORITY_SEED, b"__ika_cpi_authority");
-    }
-
-    #[test]
-    fn ix_discriminators() {
-        assert_eq!(IX_APPROVE_MESSAGE, 8);
-        assert_eq!(IX_TRANSFER_DWALLET, 24);
-    }
-}

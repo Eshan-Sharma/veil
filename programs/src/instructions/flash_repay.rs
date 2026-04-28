@@ -28,7 +28,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::LendingPool,
+    state::{check_program_owner, check_token_program, check_vault, LendingPool},
 };
 
 pub struct FlashRepay;
@@ -40,12 +40,20 @@ impl FlashRepay {
         Ok(FlashRepay)
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 5 {
             return Err(LendError::InvalidInstructionData.into());
         }
         if !accounts[0].is_signer() {
             return Err(LendError::MissingSignature.into());
+        }
+
+        // ── Owner / identity checks ──────────────────────────────────────
+        check_program_owner(&accounts[3], program_id)?;
+        check_token_program(&accounts[4])?;
+        {
+            let pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
         }
 
         // ── Read loan details ─────────────────────────────────────────────

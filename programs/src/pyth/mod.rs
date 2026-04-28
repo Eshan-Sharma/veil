@@ -70,11 +70,14 @@ pub fn read_price(account: &AccountView) -> Result<PythPrice, ProgramError> {
         return Err(LendError::OracleInvalid.into());
     }
 
-    // Confidence interval guard: reject if conf > 2 % of price.
-    // A wide CI means the market is too uncertain to use the price for
-    // collateral valuation — closing it off prevents flash-loan-driven
-    // oracle manipulation that widens spreads during the attack window.
-    if (conf as u128) * 50 > (price as u128) {
+    // Confidence interval guard: reject if conf > 1 % of price.
+    // Tighter than Pyth's recommended 2 % — Aave uses 0.5–1 %. A wide CI
+    // means the market is too uncertain to use the price for collateral
+    // valuation; this closes the oracle-manipulation window during volatile
+    // events that widen spreads.
+    if (conf as u128).checked_mul(100).ok_or(LendError::OracleInvalid)?
+        > (price as u128)
+    {
         return Err(LendError::OracleConfTooWide.into());
     }
 

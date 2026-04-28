@@ -21,12 +21,17 @@ Instruction data (after discriminator 0x0D, all little-endian):
   Total: 168 bytes
 */
 
-use pinocchio::{account::AccountView, error::ProgramError, Address, ProgramResult};
+use pinocchio::{
+    account::AccountView,
+    error::ProgramError,
+    sysvars::{clock::Clock, Sysvar},
+    Address, ProgramResult,
+};
 
 use crate::{
     errors::LendError,
     math::WAD,
-    state::LendingPool,
+    state::{check_program_owner, LendingPool},
 };
 
 pub struct UpdatePool {
@@ -72,7 +77,7 @@ impl UpdatePool {
         })
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 2 {
             return Err(LendError::InvalidInstructionData.into());
         }
@@ -80,31 +85,71 @@ impl UpdatePool {
             return Err(LendError::MissingSignature.into());
         }
 
-        // ── Validate params ───────────────────────────────────────────────
+        check_program_owner(&accounts[1], program_id)?;
+
+        // ── Validate params (safety bounds) ───────────────────────────────
         // ltv must be strictly below liquidation_threshold (else liquidation is impossible)
         if self.ltv >= self.liquidation_threshold {
-            return Err(LendError::InvalidInstructionData.into());
+            return Err(LendError::ParameterOutOfBounds.into());
         }
         // liquidation_threshold must be < WAD (can't be 100%+)
         if self.liquidation_threshold >= WAD {
-            return Err(LendError::InvalidInstructionData.into());
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // optimal_utilization must be in (0, WAD) — exact 0 / WAD make rate
+        // calculation degenerate (divide-by-zero in either branch).
+        if self.optimal_utilization == 0 || self.optimal_utilization >= WAD {
+            return Err(LendError::ParameterOutOfBounds.into());
         }
         // reserve_factor and close_factor must be < WAD
         if self.reserve_factor >= WAD || self.close_factor > WAD {
-            return Err(LendError::InvalidInstructionData.into());
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // close_factor must be > 0 (else liquidation can never reduce debt)
+        if self.close_factor == 0 {
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // Liquidation bonus capped at 50 % to limit liquidator windfall.
+        if self.liquidation_bonus > WAD / 2 {
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // Protocol liquidation fee ≤ 50 % of seized collateral.
+        if self.protocol_liq_fee > WAD / 2 {
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // Slopes capped at 10× WAD (1000 % per year) — anything higher would
+        // accrue absurd interest and is almost certainly a parameter mistake.
+        const MAX_SLOPE: u128 = 10 * WAD;
+        if self.slope1 > MAX_SLOPE || self.slope2 > MAX_SLOPE {
+            return Err(LendError::ParameterOutOfBounds.into());
+        }
+        // Base rate capped at WAD (100 %).
+        if self.base_rate > WAD {
+            return Err(LendError::ParameterOutOfBounds.into());
         }
         // flash_fee_bps ≤ 10000 (100%)
         if self.flash_fee_bps > 10_000 {
-            return Err(LendError::InvalidInstructionData.into());
+            return Err(LendError::ParameterOutOfBounds.into());
         }
 
-        // ── Authority check ───────────────────────────────────────────────
+        // ── Accrue interest under OLD parameters before swapping them in. ─
+        // Without this, the next caller's accrue would credit the elapsed
+        // window at the new rate — silently rewriting history.
+        // Clock is always present on-chain; skip accrual only in test
+        // harnesses where the sysvar is unavailable (matches the pattern
+        // used in `update_oracle_price`).
+        {
+            let pool = LendingPool::from_account_mut(&accounts[1])?;
+            if pool.authority != *accounts[0].address() {
+                return Err(LendError::Unauthorized.into());
+            }
+            if let Ok(clock) = Clock::get() {
+                pool.accrue_interest(clock.unix_timestamp)?;
+            }
+        }
+
+        // ── Apply new parameters ──────────────────────────────────────────
         let pool = LendingPool::from_account_mut(&accounts[1])?;
-        if pool.authority != *accounts[0].address() {
-            return Err(LendError::Unauthorized.into());
-        }
-
-        // ── Apply ─────────────────────────────────────────────────────────
         pool.base_rate             = self.base_rate;
         pool.optimal_utilization   = self.optimal_utilization;
         pool.slope1                = self.slope1;

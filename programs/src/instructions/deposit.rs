@@ -30,7 +30,7 @@ use pinocchio_token::instructions::Transfer;
 use crate::{
     errors::LendError,
     math,
-    state::{check_program_owner, LendingPool, UserPosition},
+    state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
 
 pub struct Deposit {
@@ -39,7 +39,7 @@ pub struct Deposit {
 }
 
 #[inline(always)]
-fn validate_new_position_pda(
+pub(crate) fn validate_new_position_pda(
     program_id: &Address,
     pool_addr: &Address,
     user_addr: &Address,
@@ -58,7 +58,7 @@ fn validate_new_position_pda(
 }
 
 #[inline(always)]
-fn validate_existing_position(
+pub(crate) fn validate_existing_position(
     pos: &UserPosition,
     user_addr: &Address,
     pool_addr: &Address,
@@ -66,19 +66,30 @@ fn validate_existing_position(
     pos.verify_binding(user_addr, pool_addr)
 }
 
+/// Smallest acceptable share count produced by a deposit. Below this, the
+/// classic ERC-4626 inflation attack lets a first depositor mint a single
+/// share, donate tokens directly to the vault, and dilute all subsequent
+/// depositors to zero. Rejecting tiny share counts keeps the inflation cost
+/// for the attacker prohibitively high.
+const MIN_DEPOSIT_SHARES: u64 = 1_000;
+
 #[inline(always)]
-fn compute_deposit_shares(amount: u64, supply_index: u128) -> Result<u64, ProgramError> {
-    math::deposit_to_shares(amount, supply_index)
+pub(crate) fn compute_deposit_shares(amount: u64, supply_index: u128) -> Result<u64, ProgramError> {
+    let shares = math::deposit_to_shares(amount, supply_index)?;
+    if shares < MIN_DEPOSIT_SHARES {
+        return Err(LendError::ZeroAmount.into());
+    }
+    Ok(shares)
 }
 
 #[inline(always)]
-fn apply_deposit_to_position(pos: &mut UserPosition, shares: u64, supply_index: u128) {
+pub(crate) fn apply_deposit_to_position(pos: &mut UserPosition, shares: u64, supply_index: u128) {
     pos.deposit_shares = pos.deposit_shares.saturating_add(shares);
     pos.deposit_index_snapshot = supply_index;
 }
 
 #[inline(always)]
-fn apply_deposit_to_pool(pool: &mut LendingPool, amount: u64) {
+pub(crate) fn apply_deposit_to_pool(pool: &mut LendingPool, amount: u64) {
     pool.total_deposits = pool.total_deposits.saturating_add(amount);
 }
 
@@ -106,8 +117,13 @@ impl Deposit {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner checks ─────────────────────────────────────────────────
+        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[3], program_id)?; // pool
+        check_token_program(&accounts[6])?;
+        {
+            let pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
+        }
 
         // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
@@ -193,63 +209,3 @@ impl Deposit {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::WAD;
-
-    fn position() -> UserPosition {
-        let mut pos: UserPosition = unsafe { core::mem::zeroed() };
-        pos.discriminator = UserPosition::DISCRIMINATOR;
-        pos.owner = Address::new_from_array([1u8; 32]);
-        pos.pool = Address::new_from_array([2u8; 32]);
-        pos
-    }
-
-    #[test]
-    fn deposit_validate_new_position_pda_rejects_wrong_address() {
-        assert_eq!(
-            validate_new_position_pda(
-                &Address::new_from_array([9u8; 32]),
-                &Address::new_from_array([2u8; 32]),
-                &Address::new_from_array([1u8; 32]),
-                &Address::new_from_array([3u8; 32]),
-                7,
-            ),
-            Err(LendError::InvalidPda.into())
-        );
-    }
-
-    #[test]
-    fn deposit_validate_existing_position_checks_binding() {
-        let pos = position();
-        assert_eq!(
-            validate_existing_position(&pos, &Address::new_from_array([1u8; 32]), &Address::new_from_array([2u8; 32])),
-            Ok(())
-        );
-        assert_eq!(
-            validate_existing_position(&pos, &Address::new_from_array([8u8; 32]), &Address::new_from_array([2u8; 32])),
-            Err(LendError::Unauthorized.into())
-        );
-    }
-
-    #[test]
-    fn deposit_compute_shares_matches_math() {
-        assert_eq!(compute_deposit_shares(1_100, WAD + WAD / 10), Ok(1_000));
-    }
-
-    #[test]
-    fn deposit_apply_position_updates_shares_and_snapshot() {
-        let mut pos = position();
-        apply_deposit_to_position(&mut pos, 500, 123);
-        assert_eq!(pos.deposit_shares, 500);
-        assert_eq!(pos.deposit_index_snapshot, 123);
-    }
-
-    #[test]
-    fn deposit_apply_pool_updates_total_deposits() {
-        let mut pool: LendingPool = unsafe { core::mem::zeroed() };
-        apply_deposit_to_pool(&mut pool, 700);
-        assert_eq!(pool.total_deposits, 700);
-    }
-}
