@@ -35,12 +35,15 @@ const RPC_FALLBACK: Record<NetworkPreset, string> = {
 };
 
 export function serverRpcUrl(): string {
+  // `||` (not `??`): empty-string env vars are written to .env.local for
+  // documentation; treat them the same as unset so we fall through to the
+  // default endpoint instead of returning "" (which fails URL parsing).
   switch (NETWORK) {
     case "mainnet":
-      return process.env.MAINNET_RPC ?? RPC_FALLBACK.mainnet;
+      return process.env.MAINNET_RPC || RPC_FALLBACK.mainnet;
     case "devnet":
-      return process.env.DEVNET_RPC ?? RPC_FALLBACK.devnet;
+      return process.env.DEVNET_RPC || RPC_FALLBACK.devnet;
     case "localnet":
-      return process.env.LOCALNET_RPC ?? RPC_FALLBACK.localnet;
+      return process.env.LOCALNET_RPC || RPC_FALLBACK.localnet;
   }
 }

@@ -12,8 +12,6 @@
 
 export type SolanaRpcPreset = "devnet" | "mainnet" | "localnet";
 
-export const SOLANA_RPC_STORAGE_KEY = "veil.solana-rpc-config";
-
 export const PRESET_RPC_URLS: Record<SolanaRpcPreset, string> = {
   devnet: "https://api.devnet.solana.com",
   mainnet: "https://api.mainnet-beta.solana.com",
@@ -23,19 +21,6 @@ export const PRESET_RPC_URLS: Record<SolanaRpcPreset, string> = {
 export type SolanaRpcConfig = {
   preset: SolanaRpcPreset;
 };
-
-export function normalizeRpcUrl(value?: string | null): string {
-  return (value ?? "").trim().replace(/\/+$/, "");
-}
-
-/** Pick a preset by exact-match against the configured default URL. */
-export function inferRpcConfig(defaultRpc?: string): SolanaRpcConfig {
-  const normalized = normalizeRpcUrl(defaultRpc);
-  for (const [preset, url] of Object.entries(PRESET_RPC_URLS)) {
-    if (normalized === url) return { preset: preset as SolanaRpcPreset };
-  }
-  return { preset: "devnet" };
-}
 
 export function getRpcEndpoint(config: SolanaRpcConfig): string {
   return PRESET_RPC_URLS[config.preset];
