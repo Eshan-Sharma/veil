@@ -4,7 +4,7 @@ import { sql } from "@/lib/db";
 import { decodeUserPosition, decodeLendingPool, healthFactor } from "@/lib/veil/state";
 import { findPositionAddress } from "@/lib/veil/pda";
 import { PROGRAM_ID } from "@/lib/veil/constants";
-import { serverRpcUrl } from "@/lib/network";
+import { NETWORK, serverRpcUrl } from "@/lib/network";
 import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
 
   if (!posInfo) {
     // Position doesn't exist on-chain — remove from DB if present.
-    await sql`DELETE FROM positions WHERE position_address = ${positionAddr.toBase58()}`;
+    await sql`DELETE FROM positions WHERE cluster = ${NETWORK} AND position_address = ${positionAddr.toBase58()}`;
     return NextResponse.json({ ok: true, exists: false });
   }
   if (!poolInfo) {
@@ -62,17 +62,17 @@ export async function POST(req: Request) {
 
   await sql`
     INSERT INTO positions (
-      position_address, pool_address, owner,
+      cluster, position_address, pool_address, owner,
       deposit_shares, borrow_principal,
       deposit_idx_snap, borrow_idx_snap,
       health_factor_wad, last_synced_at
     ) VALUES (
-      ${positionAddr.toBase58()}, ${pool_address}, ${user},
+      ${NETWORK}, ${positionAddr.toBase58()}, ${pool_address}, ${user},
       ${pos.depositShares.toString()}, ${pos.borrowPrincipal.toString()},
       ${pos.depositIndexSnapshot.toString()}, ${pos.borrowIndexSnapshot.toString()},
       ${hf.toString()}, now()
     )
-    ON CONFLICT (position_address) DO UPDATE SET
+    ON CONFLICT (cluster, position_address) DO UPDATE SET
       deposit_shares = EXCLUDED.deposit_shares,
       borrow_principal = EXCLUDED.borrow_principal,
       deposit_idx_snap = EXCLUDED.deposit_idx_snap,

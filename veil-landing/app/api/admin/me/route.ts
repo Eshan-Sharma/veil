@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql, type AdminRole } from "@/lib/db";
+import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,8 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const pubkey = searchParams.get("pubkey");
   if (!pubkey) return NextResponse.json({ role: null });
+  const limited = await rateLimit(req, { key: "admin.me", max: 120, windowSec: 60 });
+  if (limited) return limited;
   const rows = await sql`
     SELECT role FROM pool_admins
      WHERE pubkey = ${pubkey} AND revoked_at IS NULL

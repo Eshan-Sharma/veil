@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { Connection } from "@solana/web3.js";
 import { sql, type TxLogRow } from "@/lib/db";
 import { rateLimit } from "@/lib/auth/rate-limit";
-import { serverRpcUrl } from "@/lib/network";
+import { logSafe } from "@/lib/log";
+import { NETWORK, serverRpcUrl } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -90,6 +91,9 @@ export async function GET(req: Request) {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   let idx = 1;
+
+  conditions.push(`cluster = $${idx++}`);
+  params.push(NETWORK);
 
   if (wallet) {
     conditions.push(`wallet = $${idx++}`);
@@ -241,18 +245,19 @@ export async function POST(req: Request) {
         }
       }
     } catch (e) {
+      logSafe("warn", "tx.sigverify_failed", { err: String(e) });
       return NextResponse.json(
-        { error: `signature verification failed: ${(e as Error).message}` },
+        { error: "signature verification failed" },
         { status: 502 },
       );
     }
   }
 
   await sql`
-    INSERT INTO tx_log (signature, wallet, action, pool_address, amount, status, error_msg)
-    VALUES (${signature}, ${wallet}, ${action}, ${pool_address ?? null},
+    INSERT INTO tx_log (cluster, signature, wallet, action, pool_address, amount, status, error_msg)
+    VALUES (${NETWORK}, ${signature}, ${wallet}, ${action}, ${pool_address ?? null},
             ${amountStr}, ${status}, ${error_msg ?? null})
-    ON CONFLICT (signature) DO UPDATE SET
+    ON CONFLICT (cluster, signature) DO UPDATE SET
       status = EXCLUDED.status,
       error_msg = EXCLUDED.error_msg
   `;

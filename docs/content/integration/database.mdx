@@ -9,10 +9,21 @@ import { Callout } from 'nextra/components'
 
 The Veil dApp server caches on-chain state, logs transactions, curates the
 pool admin allowlist, and stores single-use auth nonces in
-[Neon Postgres](https://neon.tech). Six tables, all defined in
+[Neon Postgres](https://neon.tech). All tables defined in
 `veil-landing/lib/db/schema.sql`.
 
 The migration is idempotent — re-running `npm run db:migrate` is safe.
+
+<Callout type="warning">
+  **Cluster-scoped rows.** Tables that hold on-chain state (`pools`,
+  `positions`, `tx_log`, `audit_log`) carry a `cluster` column whose value
+  is one of `'mainnet' | 'devnet' | 'localnet'`. Every API route filters
+  reads and stamps writes with the active `NETWORK` constant so that one
+  Neon database can hold rows for multiple clusters without collision —
+  useful in dev when you switch builds between localnet and devnet. For
+  production you should still point mainnet at its own dedicated Neon
+  project; the column makes mistakes loud rather than catastrophic.
+</Callout>
 
 ## Conventions
 
@@ -60,7 +71,8 @@ Cached `LendingPool` snapshot. Refreshed by `POST /api/pools/sync`.
 
 ```sql
 CREATE TABLE pools (
-  pool_address     TEXT PRIMARY KEY,
+  cluster          TEXT NOT NULL,            -- 'mainnet'|'devnet'|'localnet'
+  pool_address     TEXT NOT NULL,
   token_mint       TEXT NOT NULL,
   symbol           TEXT,
   authority        TEXT NOT NULL,
@@ -85,6 +97,7 @@ CREATE TABLE pools (
   slope1_wad               TEXT,
   slope2_wad               TEXT,
   flash_fee_bps            INTEGER,
+  decimals                 INTEGER NOT NULL DEFAULT 9,
 
   oracle_price       NUMERIC,
   oracle_conf        NUMERIC,
@@ -94,10 +107,11 @@ CREATE TABLE pools (
   created_by         TEXT,
   init_signature     TEXT,
   last_synced_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (cluster, pool_address)
 );
-CREATE INDEX idx_pools_mint      ON pools(token_mint);
-CREATE INDEX idx_pools_authority ON pools(authority);
+CREATE INDEX idx_pools_mint      ON pools(cluster, token_mint);
+CREATE INDEX idx_pools_authority ON pools(cluster, authority);
 ```
 
 WAD-scaled risk parameters (`ltv_wad`, `liquidation_threshold_wad`, etc.)
@@ -112,19 +126,23 @@ column is what an automated liquidator would query.
 
 ```sql
 CREATE TABLE positions (
-  position_address  TEXT PRIMARY KEY,
-  pool_address      TEXT NOT NULL REFERENCES pools(pool_address) ON DELETE CASCADE,
+  cluster           TEXT NOT NULL,
+  position_address  TEXT NOT NULL,
+  pool_address      TEXT NOT NULL,
   owner             TEXT NOT NULL,
   deposit_shares    NUMERIC NOT NULL DEFAULT 0,
   borrow_principal  NUMERIC NOT NULL DEFAULT 0,
   deposit_idx_snap  TEXT,
   borrow_idx_snap   TEXT,
   health_factor_wad TEXT,
-  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (cluster, position_address),
+  FOREIGN KEY (cluster, pool_address)
+    REFERENCES pools(cluster, pool_address) ON DELETE CASCADE
 );
-CREATE INDEX idx_positions_owner  ON positions(owner);
-CREATE INDEX idx_positions_pool   ON positions(pool_address);
-CREATE INDEX idx_positions_health ON positions(health_factor_wad)
+CREATE INDEX idx_positions_owner  ON positions(cluster, owner);
+CREATE INDEX idx_positions_pool   ON positions(cluster, pool_address);
+CREATE INDEX idx_positions_health ON positions(cluster, health_factor_wad)
   WHERE borrow_principal > 0;
 ```
 
@@ -135,25 +153,29 @@ positions.
 ## `tx_log`
 
 Append-only log of submitted transactions. The dApp posts to this from
-`useVeilActions` after `confirmTransaction` resolves. The `signature`
-column is `UNIQUE`, so callers can safely `POST` the same signature with
-an updated status (e.g. `pending` → `confirmed`) without creating a
-duplicate row — the endpoint uses `ON CONFLICT DO UPDATE`.
+`useVeilActions` after `confirmTransaction` resolves. The pair
+`(cluster, signature)` is `UNIQUE`, so callers can safely `POST` the same
+signature with an updated status (e.g. `pending` → `confirmed`) without
+creating a duplicate row — the endpoint uses
+`ON CONFLICT (cluster, signature) DO UPDATE`.
 
 ```sql
 CREATE TABLE tx_log (
   id              BIGSERIAL PRIMARY KEY,
-  signature       TEXT UNIQUE NOT NULL,
+  cluster         TEXT NOT NULL,
+  signature       TEXT NOT NULL,
   pool_address    TEXT,
   wallet          TEXT NOT NULL,
   action          TEXT NOT NULL,
   amount          NUMERIC,
   status          TEXT NOT NULL DEFAULT 'pending',
   error_msg       TEXT,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (cluster, signature)
 );
-CREATE INDEX idx_tx_log_wallet ON tx_log(wallet, created_at DESC);
-CREATE INDEX idx_tx_log_pool   ON tx_log(pool_address, created_at DESC);
+CREATE INDEX idx_tx_log_wallet ON tx_log(cluster, wallet, created_at DESC);
+CREATE INDEX idx_tx_log_pool   ON tx_log(cluster, pool_address, created_at DESC);
+CREATE INDEX idx_tx_log_action ON tx_log(cluster, action, created_at DESC);
 ```
 
 `action` is a closed set:
@@ -170,13 +192,14 @@ that warrant traceability.
 ```sql
 CREATE TABLE audit_log (
   id           BIGSERIAL PRIMARY KEY,
+  cluster      TEXT NOT NULL,
   actor        TEXT NOT NULL,
   action       TEXT NOT NULL,
   target       TEXT,
   details      JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_audit_log_actor ON audit_log(actor, created_at DESC);
+CREATE INDEX idx_audit_log_actor ON audit_log(cluster, actor, created_at DESC);
 ```
 
 ## `auth_nonces`

@@ -19,6 +19,7 @@ export type AdminRow = {
 };
 
 export type PoolRow = {
+  cluster: string;
   pool_address: string;
   token_mint: string;
   symbol: string | null;
@@ -56,6 +57,7 @@ export type PoolRow = {
 };
 
 export type PositionRow = {
+  cluster: string;
   position_address: string;
   pool_address: string;
   owner: string;
@@ -69,6 +71,7 @@ export type PositionRow = {
 
 export type TxLogRow = {
   id: number;
+  cluster: string;
   signature: string;
   pool_address: string | null;
   wallet: string;

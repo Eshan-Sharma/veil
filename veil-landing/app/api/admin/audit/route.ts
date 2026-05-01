@@ -3,7 +3,7 @@ import { sql } from "@/lib/db";
 import { rateLimit } from "@/lib/auth/rate-limit";
 import { verifyAdminRequest } from "@/lib/auth/admin";
 import { expectedOrigin } from "@/lib/auth/signature";
-import { IS_MAINNET } from "@/lib/network";
+import { IS_MAINNET, NETWORK } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -56,27 +56,28 @@ export async function GET(req: Request) {
   if (actor && action) {
     rows = await sql`
       SELECT * FROM audit_log
-       WHERE actor = ${actor} AND action = ${action}
+       WHERE cluster = ${NETWORK} AND actor = ${actor} AND action = ${action}
        ORDER BY created_at DESC
        LIMIT ${limit}
     ` as AuditRow[];
   } else if (actor) {
     rows = await sql`
       SELECT * FROM audit_log
-       WHERE actor = ${actor}
+       WHERE cluster = ${NETWORK} AND actor = ${actor}
        ORDER BY created_at DESC
        LIMIT ${limit}
     ` as AuditRow[];
   } else if (action) {
     rows = await sql`
       SELECT * FROM audit_log
-       WHERE action = ${action}
+       WHERE cluster = ${NETWORK} AND action = ${action}
        ORDER BY created_at DESC
        LIMIT ${limit}
     ` as AuditRow[];
   } else {
     rows = await sql`
       SELECT * FROM audit_log
+       WHERE cluster = ${NETWORK}
        ORDER BY created_at DESC
        LIMIT ${limit}
     ` as AuditRow[];

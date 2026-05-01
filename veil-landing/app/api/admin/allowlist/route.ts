@@ -3,7 +3,7 @@ import { sql, type AdminRow } from "@/lib/db";
 import { verifyAdminRequest } from "@/lib/auth/admin";
 import { expectedOrigin } from "@/lib/auth/signature";
 import { rateLimit } from "@/lib/auth/rate-limit";
-import { IS_MAINNET } from "@/lib/network";
+import { IS_MAINNET, NETWORK } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -84,8 +84,8 @@ export async function POST(req: Request) {
           revoked_at = NULL
   `;
   await sql`
-    INSERT INTO audit_log (actor, action, target, details)
-    VALUES (${actor}, 'add_admin', ${pubkey}, ${JSON.stringify({ role, label })}::jsonb)
+    INSERT INTO audit_log (cluster, actor, action, target, details)
+    VALUES (${NETWORK}, ${actor}, 'add_admin', ${pubkey}, ${JSON.stringify({ role, label })}::jsonb)
   `;
   return NextResponse.json({ ok: true });
 }
@@ -113,8 +113,8 @@ export async function DELETE(req: Request) {
 
   await sql`UPDATE pool_admins SET revoked_at = now() WHERE pubkey = ${pubkey}`;
   await sql`
-    INSERT INTO audit_log (actor, action, target, details)
-    VALUES (${actor}, 'revoke_admin', ${pubkey}, '{}'::jsonb)
+    INSERT INTO audit_log (cluster, actor, action, target, details)
+    VALUES (${NETWORK}, ${actor}, 'revoke_admin', ${pubkey}, '{}'::jsonb)
   `;
   return NextResponse.json({ ok: true });
 }

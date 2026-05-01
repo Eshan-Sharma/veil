@@ -3,7 +3,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { sql } from "@/lib/db";
 import { decodeLendingPool } from "@/lib/veil/state";
 import { PROGRAM_ID } from "@/lib/veil/constants";
-import { serverRpcUrl } from "@/lib/network";
+import { NETWORK, serverRpcUrl } from "@/lib/network";
 import { rateLimit } from "@/lib/auth/rate-limit";
 
 export const runtime = "nodejs";
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
 
   let poolPk: PublicKey;
   try { poolPk = new PublicKey(poolAddr); }
-  catch (e) { return NextResponse.json({ error: `bad pubkey: ${(e as Error).message}` }, { status: 400 }); }
+  catch { return NextResponse.json({ error: "invalid pubkey" }, { status: 400 }); }
 
   const conn = new Connection(serverRpcUrl(), "confirmed");
   const info = await conn.getAccountInfo(poolPk);
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   const hasOracle = pythFeed !== "11111111111111111111111111111111";
   await sql`
     INSERT INTO pools (
-      pool_address, token_mint, symbol, authority, vault,
+      cluster, pool_address, token_mint, symbol, authority, vault,
       pool_bump, authority_bump, vault_bump, paused,
       total_deposits, total_borrows, accumulated_fees,
       supply_index, borrow_index,
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
       oracle_price, oracle_conf, oracle_expo, pyth_price_feed,
       last_synced_at
     ) VALUES (
-      ${poolAddr}, ${p.tokenMint.toBase58()}, ${body.symbol ?? null},
+      ${NETWORK}, ${poolAddr}, ${p.tokenMint.toBase58()}, ${body.symbol ?? null},
       ${p.authority.toBase58()}, ${p.vault.toBase58()},
       ${p.poolBump}, ${p.authorityBump}, ${p.vaultBump},
       ${p.paused},
@@ -67,7 +67,7 @@ export async function POST(req: Request) {
       ${hasOracle ? pythFeed : null},
       now()
     )
-    ON CONFLICT (pool_address) DO UPDATE SET
+    ON CONFLICT (cluster, pool_address) DO UPDATE SET
       symbol = COALESCE(EXCLUDED.symbol, pools.symbol),
       authority = EXCLUDED.authority,
       vault = EXCLUDED.vault,

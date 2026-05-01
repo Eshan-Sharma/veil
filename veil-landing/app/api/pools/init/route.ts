@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { verifyAdminRequest } from "@/lib/auth/admin";
+import { rateLimit } from "@/lib/auth/rate-limit";
 import { expectedOrigin } from "@/lib/auth/signature";
+import { NETWORK } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -45,21 +47,24 @@ export async function POST(req: Request) {
   });
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: 401 });
 
+  const limited = await rateLimit(req, { key: "pools.init", max: 20, windowSec: 60 });
+  if (limited) return limited;
+
   await sql`
     INSERT INTO pools (
-      pool_address, token_mint, symbol, authority, vault,
+      cluster, pool_address, token_mint, symbol, authority, vault,
       pool_bump, authority_bump, vault_bump, decimals,
       created_by, init_signature
     ) VALUES (
-      ${pool_address}, ${token_mint}, ${symbol ?? null}, ${authority}, ${vault},
+      ${NETWORK}, ${pool_address}, ${token_mint}, ${symbol ?? null}, ${authority}, ${vault},
       ${pool_bump ?? 0}, ${authority_bump ?? 0}, ${vault_bump ?? 0}, ${decimals ?? 9},
       ${actor}, ${init_signature ?? null}
     )
-    ON CONFLICT (pool_address) DO NOTHING
+    ON CONFLICT (cluster, pool_address) DO NOTHING
   `;
   await sql`
-    INSERT INTO audit_log (actor, action, target, details)
-    VALUES (${actor}, 'init_pool', ${pool_address},
+    INSERT INTO audit_log (cluster, actor, action, target, details)
+    VALUES (${NETWORK}, ${actor}, 'init_pool', ${pool_address},
             ${JSON.stringify({ token_mint, symbol, init_signature })}::jsonb)
   `;
   return NextResponse.json({ ok: true });

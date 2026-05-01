@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { rateLimit } from "@/lib/auth/rate-limit";
+import { NETWORK } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -78,15 +79,16 @@ export async function GET(
       pl.oracle_price,
       pl.oracle_expo
     FROM positions p
-    JOIN pools pl ON pl.pool_address = p.pool_address
-    WHERE p.owner = ${user}
+    JOIN pools pl ON pl.cluster = p.cluster AND pl.pool_address = p.pool_address
+    WHERE p.cluster = ${NETWORK} AND p.owner = ${user}
     ORDER BY p.last_synced_at DESC
   `;
 
   const txRows = await sql`
     SELECT signature, pool_address, action, amount, status, created_at
     FROM tx_log
-    WHERE wallet = ${user}
+    WHERE cluster = ${NETWORK}
+      AND wallet = ${user}
       AND status = 'confirmed'
     ORDER BY created_at DESC
     LIMIT 200

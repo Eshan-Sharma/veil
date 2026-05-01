@@ -1,6 +1,12 @@
 -- ─── Veil Postgres schema ────────────────────────────────────────────────────
 -- Run via:  npm run db:migrate
 -- Idempotent — safe to re-apply.
+--
+-- Cluster scoping: tables that hold on-chain state (pools, positions, tx_log,
+-- audit_log) carry a `cluster` column so a single database can host multiple
+-- clusters' rows without collision. API routes always filter/insert with the
+-- current `NETWORK` constant. Mainnet should still use a dedicated database;
+-- the column makes mistakes loud rather than catastrophic.
 
 CREATE TABLE IF NOT EXISTS pool_admins (
   pubkey       TEXT PRIMARY KEY,
@@ -13,7 +19,8 @@ CREATE TABLE IF NOT EXISTS pool_admins (
 CREATE INDEX IF NOT EXISTS idx_pool_admins_role ON pool_admins(role) WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS pools (
-  pool_address     TEXT PRIMARY KEY,                    -- Solana PDA
+  cluster          TEXT NOT NULL,                       -- 'mainnet'|'devnet'|'localnet'
+  pool_address     TEXT NOT NULL,                       -- Solana PDA
   token_mint       TEXT NOT NULL,
   symbol           TEXT,                                -- ui label (SOL, BTC, ...)
   authority        TEXT NOT NULL,                       -- on-chain pool.authority
@@ -49,51 +56,58 @@ CREATE TABLE IF NOT EXISTS pools (
   created_by         TEXT,
   init_signature     TEXT,
   last_synced_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (cluster, pool_address)
 );
-CREATE INDEX IF NOT EXISTS idx_pools_mint ON pools(token_mint);
-CREATE INDEX IF NOT EXISTS idx_pools_authority ON pools(authority);
+CREATE INDEX IF NOT EXISTS idx_pools_mint ON pools(cluster, token_mint);
+CREATE INDEX IF NOT EXISTS idx_pools_authority ON pools(cluster, authority);
 
 CREATE TABLE IF NOT EXISTS positions (
-  position_address  TEXT PRIMARY KEY,
-  pool_address      TEXT NOT NULL REFERENCES pools(pool_address) ON DELETE CASCADE,
+  cluster           TEXT NOT NULL,
+  position_address  TEXT NOT NULL,
+  pool_address      TEXT NOT NULL,
   owner             TEXT NOT NULL,
   deposit_shares    NUMERIC NOT NULL DEFAULT 0,
   borrow_principal  NUMERIC NOT NULL DEFAULT 0,
   deposit_idx_snap  TEXT,
   borrow_idx_snap   TEXT,
   health_factor_wad TEXT,
-  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (cluster, position_address),
+  FOREIGN KEY (cluster, pool_address) REFERENCES pools(cluster, pool_address) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_positions_owner ON positions(owner);
-CREATE INDEX IF NOT EXISTS idx_positions_pool ON positions(pool_address);
-CREATE INDEX IF NOT EXISTS idx_positions_health ON positions(health_factor_wad)
+CREATE INDEX IF NOT EXISTS idx_positions_owner ON positions(cluster, owner);
+CREATE INDEX IF NOT EXISTS idx_positions_pool ON positions(cluster, pool_address);
+CREATE INDEX IF NOT EXISTS idx_positions_health ON positions(cluster, health_factor_wad)
   WHERE borrow_principal > 0;
 
 CREATE TABLE IF NOT EXISTS tx_log (
   id              BIGSERIAL PRIMARY KEY,
-  signature       TEXT UNIQUE NOT NULL,
+  cluster         TEXT NOT NULL,
+  signature       TEXT NOT NULL,
   pool_address    TEXT,
   wallet          TEXT NOT NULL,
   action          TEXT NOT NULL, -- deposit|withdraw|borrow|repay|liquidate|cross_*|flash*|init|init_position|update_pool|pause|resume|collect_fees|update_oracle|set_pool_decimals
   amount          NUMERIC,
   status          TEXT NOT NULL DEFAULT 'pending', -- 'pending'|'confirmed'|'failed'
   error_msg       TEXT,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (cluster, signature)
 );
-CREATE INDEX IF NOT EXISTS idx_tx_log_wallet ON tx_log(wallet, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tx_log_pool ON tx_log(pool_address, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tx_log_action ON tx_log(action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tx_log_wallet ON tx_log(cluster, wallet, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tx_log_pool ON tx_log(cluster, pool_address, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tx_log_action ON tx_log(cluster, action, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id           BIGSERIAL PRIMARY KEY,
+  cluster      TEXT NOT NULL,
   actor        TEXT NOT NULL,
   action       TEXT NOT NULL,
   target       TEXT,
   details      JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(cluster, actor, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS auth_nonces (
   pubkey      TEXT NOT NULL,

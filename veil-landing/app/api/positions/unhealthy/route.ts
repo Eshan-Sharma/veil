@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { rateLimit } from "@/lib/auth/rate-limit";
+import { NETWORK } from "@/lib/network";
 
 export const runtime = "nodejs";
 
@@ -39,8 +40,9 @@ export async function GET(req: Request) {
       pl.oracle_expo,
       pl.decimals
     FROM positions p
-    JOIN pools pl ON pl.pool_address = p.pool_address
-    WHERE p.borrow_principal > 0 OR p.deposit_shares > 0
+    JOIN pools pl ON pl.cluster = p.cluster AND pl.pool_address = p.pool_address
+    WHERE p.cluster = ${NETWORK}
+      AND (p.borrow_principal > 0 OR p.deposit_shares > 0)
   `;
 
   // Group by owner, compute account-level HF
