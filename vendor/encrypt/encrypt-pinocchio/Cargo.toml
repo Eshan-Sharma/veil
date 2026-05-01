@@ -1,0 +1,12 @@
+[package]
+name = "encrypt-pinocchio"
+version = "0.1.0"
+authors = ["dWallet Labs, Ltd. <dev@dwalletlabs.com>"]
+license = "BSD-3-Clause-Clear"
+publish = false
+edition = "2021"
+
+[dependencies]
+encrypt-types = { path = "../encrypt-types", default-features = false }
+encrypt-solana-types = { path = "../encrypt-solana-types" }
+pinocchio = { version = "0.11.1", features = ["cpi"] }

@@ -1,0 +1,15 @@
+[package]
+name = "encrypt-types"
+version = "0.1.0"
+authors = ["dWallet Labs, Ltd. <dev@dwalletlabs.com>"]
+license = "BSD-3-Clause-Clear"
+publish = false
+edition = "2021"
+
+[features]
+default = []
+bcs-serde = ["dep:bcs", "dep:serde"]
+
+[dependencies]
+bcs = { version = "0.1", optional = true }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }

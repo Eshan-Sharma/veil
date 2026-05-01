@@ -1,0 +1,10 @@
+[package]
+name = "encrypt-solana-types"
+version = "0.1.0"
+authors = ["dWallet Labs, Ltd. <dev@dwalletlabs.com>"]
+license = "BSD-3-Clause-Clear"
+publish = false
+edition = "2021"
+
+[dependencies]
+encrypt-types = { path = "../encrypt-types", default-features = false }
