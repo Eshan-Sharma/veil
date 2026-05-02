@@ -24,6 +24,7 @@ import {
   SYSTEM_PROGRAM_ID,
 } from "@/lib/veil";
 import type { CollateralPair } from "@/lib/veil/instructions";
+import { formatTxError } from "@/lib/veil/errors";
 import type { PoolView } from "@/lib/veil/usePools";
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "success" | "error";
@@ -105,18 +106,15 @@ export const useVeilActions = () => {
       setStatus("success");
     } catch (e: unknown) {
       setStatus("error");
-      const msg = e instanceof Error ? e.message : "Transaction failed";
-      // Extract program logs from SendTransactionError for debugging
+      // Full error → console (with logs); friendly one-liner → UI.
       const err = e as Record<string, unknown>;
       const logs = (err?.logs ?? (err?.cause as Record<string, unknown>)?.logs) as string[] | undefined;
       if (logs?.length) {
-        logSafe("error", "veil.tx.failed_with_logs", { action: meta.action, logs });
-        const progErr = logs.find((l: string) => l.includes("Error") || l.includes("failed"));
-        setErrorMsg(progErr ? `${msg}: ${progErr}` : msg);
+        logSafe("error", "veil.tx.failed_with_logs", { action: meta.action, logs, err: String(e) });
       } else {
         logSafe("error", "veil.tx.failed", { action: meta.action, err: String(e) });
-        setErrorMsg(msg);
       }
+      setErrorMsg(formatTxError(e));
     }
   }
 
@@ -217,7 +215,8 @@ export const useVeilActions = () => {
         void syncPool(pool.poolAddress.toBase58());
       } catch (e: unknown) {
         setStatus("error");
-        setErrorMsg(e instanceof Error ? e.message : "Transaction failed");
+        logSafe("error", "veil.tx.failed", { action: "flash", err: String(e) });
+        setErrorMsg(formatTxError(e));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
