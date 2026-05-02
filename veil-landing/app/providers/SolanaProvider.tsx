@@ -1,85 +1,57 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
+import type { Adapter } from "@solana/wallet-adapter-base";
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import "@solana/wallet-adapter-react-ui/styles.css";
+import { TestWalletAdapter } from "@/app/dapp/lib/TestWalletAdapter";
 import {
-  SOLANA_RPC_STORAGE_KEY,
   getRpcEndpoint,
-  inferRpcConfig,
   type SolanaRpcConfig,
   type SolanaRpcPreset,
 } from "@/lib/solana/rpc";
-import { logSafe } from "@/lib/log";
 
 type SolanaRpcContextValue = SolanaRpcConfig & {
   endpoint: string;
-  setPreset: (preset: SolanaRpcPreset) => void;
 };
 
-const DEFAULT_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC;
-const defaultConfig = inferRpcConfig(DEFAULT_RPC);
+// The cluster is fixed at build time by `NEXT_PUBLIC_SOLANA_CLUSTER`. Each
+// deploy serves exactly one cluster — API routes, Neon DB, and the program
+// ID are all pinned to it, so letting users flip clusters in the UI would
+// only desync the wallet from everything else.
+const RAW_CLUSTER = (process.env.NEXT_PUBLIC_SOLANA_CLUSTER ?? "devnet").toLowerCase();
+const PRESET: SolanaRpcPreset =
+  RAW_CLUSTER === "mainnet" || RAW_CLUSTER === "mainnet-beta"
+    ? "mainnet"
+    : RAW_CLUSTER === "localnet" || RAW_CLUSTER === "local"
+      ? "localnet"
+      : "devnet";
+const config: SolanaRpcConfig = { preset: PRESET };
+const ENDPOINT = getRpcEndpoint(config);
 
 const SolanaRpcContext = createContext<SolanaRpcContextValue>({
-  ...defaultConfig,
-  endpoint: getRpcEndpoint(defaultConfig),
-  setPreset: () => {},
+  ...config,
+  endpoint: ENDPOINT,
 });
 
 export const useSolanaRpc = () => useContext(SolanaRpcContext);
 
-const VALID_PRESETS = new Set<SolanaRpcPreset>(["devnet", "mainnet", "localnet"]);
-
 export default function SolanaProvider({ children }: { children: ReactNode }) {
-  const [config, setConfig] = useState<SolanaRpcConfig>(defaultConfig);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(SOLANA_RPC_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<SolanaRpcConfig>;
-      if (!parsed || typeof parsed !== "object") return;
-      // Only accept whitelisted presets — defends against a compromised
-      // localStorage redirecting RPC traffic to an attacker. See M1.
-      if (parsed.preset && VALID_PRESETS.has(parsed.preset as SolanaRpcPreset)) {
-        setConfig({ preset: parsed.preset as SolanaRpcPreset });
-      }
-    } catch (err) {
-      logSafe("warn", "solana.rpc.localstorage_parse", { err: String(err) });
+  const wallets = useMemo(() => {
+    const base: Adapter[] = [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
+    // Test wallet: only loaded when explicitly enabled and never on mainnet.
+    if (process.env.NEXT_PUBLIC_TEST_WALLET === "1" && PRESET !== "mainnet") {
+      base.unshift(new TestWalletAdapter());
     }
+    return base;
   }, []);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(SOLANA_RPC_STORAGE_KEY, JSON.stringify(config));
-    } catch (err) {
-      logSafe("warn", "solana.rpc.localstorage_write", { err: String(err) });
-    }
-  }, [config]);
-
-  const endpoint = getRpcEndpoint(config);
-  const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
-    []
-  );
-  const value = useMemo(
-    () => ({
-      ...config,
-      endpoint,
-      setPreset: (preset: SolanaRpcPreset) => {
-        if (!VALID_PRESETS.has(preset)) return;
-        setConfig({ preset });
-      },
-    }),
-    [config, endpoint]
-  );
-
   return (
-    <SolanaRpcContext.Provider value={value}>
-      <ConnectionProvider endpoint={endpoint}>
+    <SolanaRpcContext.Provider value={{ ...config, endpoint: ENDPOINT }}>
+      <ConnectionProvider endpoint={ENDPOINT}>
         <WalletProvider wallets={wallets} autoConnect>
           <WalletModalProvider>{children}</WalletModalProvider>
         </WalletProvider>
