@@ -21,11 +21,12 @@ import {
   depositIx,
   borrowIx,
 } from "../lib/veil/instructions";
-import { mockFeesIx } from "./_mock-instructions";
+import { mockFeesIx, mockOracleIx } from "./_mock-instructions";
 import { findPositionAddress, findPoolAuthorityAddress } from "../lib/veil/pda";
 import { WAD } from "../lib/veil/constants";
 
-const RPC = "http://127.0.0.1:8899";
+const RPC = process.env.RPC_URL ?? process.env.RPC ?? "http://127.0.0.1:8899";
+const CLUSTER = process.env.CLUSTER ?? "localnet";
 
 type PoolConfig = {
   symbol: string;
@@ -43,6 +44,8 @@ type PoolConfig = {
   flashFeeBps: bigint;
   depositAmount: bigint;
   borrowAmount: bigint;
+  mockPrice: bigint;
+  mockExpo: number;
 };
 
 const POOLS: PoolConfig[] = [
@@ -62,6 +65,8 @@ const POOLS: PoolConfig[] = [
     flashFeeBps: 9n,
     depositAmount: 50_000_000_000n,    // 50 SOL
     borrowAmount: 20_000_000_000n,     // 20 SOL
+    mockPrice: 15000n,                 // $150.00
+    mockExpo: -2,
   },
   {
     symbol: "USDC",
@@ -79,6 +84,8 @@ const POOLS: PoolConfig[] = [
     flashFeeBps: 5n,
     depositAmount: 100_000_000_000n,   // 100,000 USDC
     borrowAmount: 60_000_000_000n,     // 60,000 USDC
+    mockPrice: 100n,                   // $1.00
+    mockExpo: -2,
   },
   {
     symbol: "USDT",
@@ -96,6 +103,8 @@ const POOLS: PoolConfig[] = [
     flashFeeBps: 5n,
     depositAmount: 75_000_000_000n,    // 75,000 USDT
     borrowAmount: 40_000_000_000n,     // 40,000 USDT
+    mockPrice: 100n,                   // $1.00
+    mockExpo: -2,
   },
 ];
 
@@ -150,6 +159,13 @@ async function main() {
     await sendAndConfirmTransaction(connection, updateTx, [payer]);
     console.log(`  Parameters set.`);
 
+    // 3b. Anchor mock oracle (required before borrow)
+    const oracleTx = new Transaction().add(
+      mockOracleIx(payer.publicKey, pool, cfg.mockPrice, cfg.mockExpo)
+    );
+    await sendAndConfirmTransaction(connection, oracleTx, [payer]);
+    console.log(`  Oracle: $${(Number(cfg.mockPrice) * 10 ** cfg.mockExpo).toFixed(2)} (mock)`);
+
     // 4. Create user ATA and mint tokens
     const userAta = getAssociatedTokenAddressSync(mint, payer.publicKey);
     const ataTx = new Transaction().add(
@@ -194,17 +210,17 @@ async function main() {
 
     await sql`
       INSERT INTO pools (
-        pool_address, token_mint, symbol, authority, vault,
+        cluster, pool_address, token_mint, symbol, authority, vault,
         pool_bump, authority_bump, vault_bump, paused,
         total_deposits, total_borrows, accumulated_fees,
         ltv_wad, liquidation_threshold_wad, liquidation_bonus_wad, protocol_liq_fee_wad,
         reserve_factor_wad, close_factor_wad,
         base_rate_wad, optimal_util_wad, slope1_wad, slope2_wad,
-        flash_fee_bps,
+        flash_fee_bps, decimals,
         oracle_price, oracle_conf, oracle_expo, pyth_price_feed,
         last_synced_at
       ) VALUES (
-        ${pool.toBase58()}, ${p.tokenMint.toBase58()}, ${cfg.symbol},
+        ${CLUSTER}, ${pool.toBase58()}, ${p.tokenMint.toBase58()}, ${cfg.symbol},
         ${p.authority.toBase58()}, ${p.vault.toBase58()},
         ${p.poolBump}, ${p.authorityBump}, ${p.vaultBump},
         ${p.paused},
@@ -212,12 +228,12 @@ async function main() {
         ${p.ltv.toString()}, ${p.liquidationThreshold.toString()}, ${p.liquidationBonus.toString()}, ${p.protocolLiqFee.toString()},
         ${p.reserveFactor.toString()}, ${p.closeFactor.toString()},
         ${p.baseRate.toString()}, ${p.optimalUtilization.toString()}, ${p.slope1.toString()}, ${p.slope2.toString()},
-        ${Number(p.flashFeeBps)},
+        ${Number(p.flashFeeBps)}, ${cfg.decimals},
         ${p.oraclePrice.toString()}, ${p.oracleConf.toString()}, ${p.oracleExpo},
         ${hasOracle ? pythFeed : null},
         now()
       )
-      ON CONFLICT (pool_address) DO UPDATE SET
+      ON CONFLICT (cluster, pool_address) DO UPDATE SET
         symbol = EXCLUDED.symbol,
         total_deposits = EXCLUDED.total_deposits,
         total_borrows = EXCLUDED.total_borrows,
@@ -244,10 +260,10 @@ async function main() {
       const { decodeUserPosition } = await import("../lib/veil/state");
       const pos = decodeUserPosition(Buffer.from(posInfo.data));
       await sql`
-        INSERT INTO positions (position_address, pool_address, owner, deposit_shares, borrow_principal, last_synced_at)
-        VALUES (${position.toBase58()}, ${pool.toBase58()}, ${payer.publicKey.toBase58()},
+        INSERT INTO positions (cluster, position_address, pool_address, owner, deposit_shares, borrow_principal, last_synced_at)
+        VALUES (${CLUSTER}, ${position.toBase58()}, ${pool.toBase58()}, ${payer.publicKey.toBase58()},
                 ${pos.depositShares.toString()}, ${pos.borrowPrincipal.toString()}, now())
-        ON CONFLICT (position_address) DO UPDATE SET
+        ON CONFLICT (cluster, position_address) DO UPDATE SET
           deposit_shares = EXCLUDED.deposit_shares,
           borrow_principal = EXCLUDED.borrow_principal,
           last_synced_at = now()
@@ -261,8 +277,8 @@ async function main() {
 
   // Log audit
   await sql`
-    INSERT INTO audit_log (actor, action, target, details)
-    VALUES (${payer.publicKey.toBase58()}, 'localnet_setup', 'system',
+    INSERT INTO audit_log (cluster, actor, action, target, details)
+    VALUES (${CLUSTER}, ${payer.publicKey.toBase58()}, 'localnet_setup', 'system',
             ${JSON.stringify({ pools: results })}::jsonb)
   `;
 

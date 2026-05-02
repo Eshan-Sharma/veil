@@ -23,6 +23,7 @@ config({ path: join(process.cwd(), ".env.local") });
 void fileURLToPath; void dirname;
 
 import { updateOraclePriceIx } from "../lib/veil/instructions";
+import { clusterEnv } from "./_cluster";
 
 interface ApiPool {
   pool_address: string;
@@ -43,7 +44,7 @@ function loadKeypair(): Keypair {
 
 const INTERVAL = Math.max(5, Number(process.env.KEEPER_INTERVAL_SEC ?? 30));
 const API_BASE = process.env.KEEPER_API_BASE ?? "http://localhost:4321";
-const RPC = process.env.KEEPER_RPC ?? process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
+const RPC = process.env.KEEPER_RPC ?? clusterEnv().rpc;
 
 async function fetchPools(): Promise<ApiPool[]> {
   const res = await fetch(`${API_BASE}/api/pools`, { cache: "no-store" });

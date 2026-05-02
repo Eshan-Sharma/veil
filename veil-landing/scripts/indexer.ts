@@ -22,10 +22,17 @@ neonConfig.webSocketConstructor = ws;
 
 import { decodeUserPosition, decodeLendingPool } from "../lib/veil/state";
 import { POSITION_DISCRIMINATOR, POSITION_SIZE } from "../lib/veil/constants";
+import { clusterEnv } from "./_cluster";
 
-const RPC = process.env.INDEXER_RPC ?? process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_VEIL_PROGRAM_ID ?? "11111111111111111111111111111111");
-const DATABASE_URL = process.env.DATABASE_URL;
+const env = clusterEnv();
+const RPC = process.env.INDEXER_RPC ?? env.rpc;
+if (!env.programId) {
+  console.error("NEXT_PUBLIC_VEIL_PROGRAM_ID not set");
+  process.exit(1);
+}
+const PROGRAM_ID = new PublicKey(env.programId);
+const DATABASE_URL = env.databaseUrl;
+const CLUSTER = env.cluster;
 
 const WAD = 1_000_000_000_000_000_000n;
 
@@ -85,12 +92,12 @@ async function upsertPosition(
   try {
     await client.query(
       `INSERT INTO positions (
-         position_address, pool_address, owner,
+         cluster, position_address, pool_address, owner,
          deposit_shares, borrow_principal,
          deposit_idx_snap, borrow_idx_snap,
          health_factor_wad, last_synced_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-       ON CONFLICT (position_address) DO UPDATE SET
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       ON CONFLICT (cluster, position_address) DO UPDATE SET
          deposit_shares    = EXCLUDED.deposit_shares,
          borrow_principal  = EXCLUDED.borrow_principal,
          deposit_idx_snap  = EXCLUDED.deposit_idx_snap,
@@ -98,6 +105,7 @@ async function upsertPosition(
          health_factor_wad = EXCLUDED.health_factor_wad,
          last_synced_at    = now()`,
       [
+        CLUSTER,
         positionAddr.toBase58(),
         pos.pool.toBase58(),
         pos.owner.toBase58(),

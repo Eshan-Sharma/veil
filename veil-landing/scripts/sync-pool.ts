@@ -13,6 +13,8 @@ import { join } from "path";
 config({ path: join(process.cwd(), ".env.local") });
 neonConfig.webSocketConstructor = ws;
 
+import { clusterEnv } from "./_cluster";
+
 // Symbol lookup by known Pyth feeds (localnet mints are random, so we tag by oracle)
 const PYTH_SYMBOL: Record<string, string> = {
   "Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD": "USDC",
@@ -45,8 +47,8 @@ async function main() {
   const { decodeLendingPool, decodeUserPosition, healthFactor } = await import("../lib/veil/state");
   const { findPositionAddress } = await import("../lib/veil/pda");
 
-  const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "http://127.0.0.1:8899";
-  const conn = new Connection(rpc, "confirmed");
+  const env = clusterEnv();
+  const conn = new Connection(env.rpc, "confirmed");
 
   // Parse args: pool addresses (optionally with :SYMBOL suffix) followed by optional user pubkey
   // Example: npx tsx scripts/sync-pool.ts POOL1:USDC POOL2:USDT POOL3:SOL USER_PUBKEY
@@ -72,17 +74,21 @@ async function main() {
     return { addr, symbolHint: sym ?? undefined };
   });
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) { console.error("DATABASE_URL not set"); process.exit(1); }
+  const dbUrl = env.databaseUrl;
+  if (!dbUrl) {
+    console.error("DATABASE_URL not set");
+    process.exit(1);
+  }
 
+  const CLUSTER = env.cluster;
   const dbPool = new Pool({ connectionString: dbUrl });
   const client = await dbPool.connect();
 
   try {
-    // Clear stale data
-    await client.query(`DELETE FROM positions`);
-    await client.query(`DELETE FROM pools`);
-    console.log("Cleared old DB data.");
+    // Clear stale data for this cluster only
+    await client.query(`DELETE FROM positions WHERE cluster = $1`, [CLUSTER]);
+    await client.query(`DELETE FROM pools WHERE cluster = $1`, [CLUSTER]);
+    console.log(`Cleared old DB data for cluster=${CLUSTER}.`);
 
     for (const entry of poolEntries) {
       const poolAddr = entry.addr;
@@ -108,7 +114,7 @@ async function main() {
 
       await client.query(
         `INSERT INTO pools (
-          pool_address, token_mint, symbol, authority, vault,
+          cluster, pool_address, token_mint, symbol, authority, vault,
           pool_bump, authority_bump, vault_bump, paused,
           total_deposits, total_borrows, accumulated_fees,
           supply_index, borrow_index,
@@ -119,19 +125,20 @@ async function main() {
           oracle_price, oracle_conf, oracle_expo, pyth_price_feed,
           last_synced_at
         ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7, $8, $9,
-          $10, $11, $12,
-          $13, $14,
-          $15, $16, $17, $18,
-          $19, $20,
-          $21, $22, $23, $24,
-          $25, $26,
-          $27, $28, $29, $30,
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10,
+          $11, $12, $13,
+          $14, $15,
+          $16, $17, $18, $19,
+          $20, $21,
+          $22, $23, $24, $25,
+          $26, $27,
+          $28, $29, $30, $31,
           now()
         )
-        ON CONFLICT (pool_address) DO NOTHING`,
+        ON CONFLICT (cluster, pool_address) DO NOTHING`,
         [
+          CLUSTER,
           poolAddr, p.tokenMint.toBase58(), symbol, p.authority.toBase58(), p.vault.toBase58(),
           p.poolBump, p.authorityBump, p.vaultBump, p.paused,
           p.totalDeposits.toString(), p.totalBorrows.toString(), p.accumulatedFees.toString(),
@@ -161,17 +168,18 @@ async function main() {
           );
           await client.query(
             `INSERT INTO positions (
-              position_address, pool_address, owner,
+              cluster, position_address, pool_address, owner,
               deposit_shares, borrow_principal,
               deposit_idx_snap, borrow_idx_snap,
               health_factor_wad, last_synced_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-            ON CONFLICT (position_address) DO UPDATE SET
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+            ON CONFLICT (cluster, position_address) DO UPDATE SET
               deposit_shares = EXCLUDED.deposit_shares,
               borrow_principal = EXCLUDED.borrow_principal,
               health_factor_wad = EXCLUDED.health_factor_wad,
               last_synced_at = now()`,
             [
+              CLUSTER,
               positionPk.toBase58(), poolAddr, userPubkey,
               pos.depositShares.toString(), pos.borrowPrincipal.toString(),
               pos.depositIndexSnapshot.toString(), pos.borrowIndexSnapshot.toString(),
