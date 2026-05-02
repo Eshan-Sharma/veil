@@ -33,7 +33,7 @@ export function getPoolType(symbol: string): PoolType {
   const s = symbol.toUpperCase();
   if (s === "BTC" || s === "ETH") return "ika";
   if (s === "XAU") return "oro";
-  if (s === "USDC") return "enc";
+  if (s === "USDC" || s === "USDT") return "enc";
 
   return "native";
 }

@@ -13,10 +13,11 @@ import { formatPrice, formatUsd, tokenToUsd, type PythPrices } from "@/lib/pyth/
 import { usePools, type PoolView } from "@/lib/veil/usePools";
 import { WAD } from "@/lib/veil/constants";
 import { WalletButton as WalletMultiButton } from "../components/WalletButton";
-import { RpcSwitcher } from "./components/RpcSwitcher";
 import { useVeilActions } from "./hooks/useVeilActions";
+import { useIkaActions } from "./hooks/useIkaActions";
 import { usePythPrices } from "./hooks/usePythPrices";
 import { useChainPolling, type ChainPositionUpdate } from "./hooks/useChainPolling";
+import { SignatureScheme, DWalletCurve } from "@/lib/ika";
 import {
   wadToPctNum,
   wadToPctStr,
@@ -29,7 +30,7 @@ import {
 } from "./lib/format";
 import { getPoolType, getPoolIcon, getPoolColor, type PoolType } from "./lib/tokens";
 
-// ─── Types ──────────────────────���─────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type View = "markets" | "portfolio" | "flash" | "liquidate" | "history";
 type ModalType = "supply" | "borrow" | "withdraw" | "repay" | "ika-setup";
@@ -176,7 +177,7 @@ const CipherVal = ({ seed, mask }: { seed: number; mask: string }) => {
   return <span className="cipher-mask rotate-cipher" title={`ct:${v}`}>{mask}</span>;
 };
 
-// ─── API reference ───────────────────────���────────────────────────────────────
+// ─── API reference ──────────────────────────────────────────────────────────────
 
 const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/v1/flash/borrow", desc: "Initiate a flash borrow. Returns a signed transaction envelope.", params: [{ n: "asset", t: "string", d: "Pool asset ID — sol | btc | eth | xau | usdc" }, { n: "amount", t: "u64", d: "Lamports / base units to borrow" }, { n: "receiver", t: "pubkey", d: "Program that will receive funds and repay" }] },
@@ -187,7 +188,7 @@ const API_ENDPOINTS: ApiEndpoint[] = [
 
 const METHOD_COLOR: Record<string, string> = { GET: "#059669", POST: "#6d28d9", DELETE: "#dc2626" };
 
-// ─── Shared Components ───────────���───────────────────────────────────────────
+// ─── Shared Components ─────────────────────────────────────────────────────────
 
 const Tag = ({ type }: { type: PoolType }) => {
   const map: Record<PoolType, [string, string]> = {
@@ -310,7 +311,7 @@ const IrmParam = ({ k, v, hint }: { k: string; v: string; hint: string }) => {
   );
 };
 
-// ─── IRM Chart ───────────────────���───────────────────────��────────────────────
+// ─── IRM Chart ───────────────────────────────────────────────────────────────────
 
 const IrmChart = ({ pool }: { pool: PoolView }) => {
   const VW = 280, VH = 150;
@@ -423,7 +424,7 @@ const IrmChart = ({ pool }: { pool: PoolView }) => {
   );
 };
 
-// ─── Pool Detail Panel ─────────���────────────────────────��─────────────────────
+// ─── Pool Detail Panel ───────────────────────────────────────────────────────────
 
 const PoolDetail = ({ pool, fhe, setModal, onClose, pythPrices }: { pool: PoolView; fhe: boolean; setModal: (m: ModalState | null) => void; onClose: () => void; pythPrices?: PythPrices }) => {
   const type = getPoolType(pool.symbol);
@@ -548,9 +549,9 @@ const PoolDetail = ({ pool, fhe, setModal, onClose, pythPrices }: { pool: PoolVi
   );
 };
 
-// ─── Navigation ────────────────────���──────────────────────────��──────────────
+// ─── Navigation ─────────────────────────────────────────────────────────────────
 
-const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView: (v: View) => void; fhe: boolean; setFhe: (fn: (v: boolean) => boolean) => void; onOpenRpc: () => void }) => {
+const AppNav = ({ view, setView, fhe, setFhe }: { view: View; setView: (v: View) => void; fhe: boolean; setFhe: (fn: (v: boolean) => boolean) => void }) => {
   const { publicKey } = useWallet();
   const { preset } = useSolanaRpc();
   const tabs: { id: View; label: string; icon: string }[] = [
@@ -590,11 +591,11 @@ const AppNav = ({ view, setView, fhe, setFhe, onOpenRpc }: { view: View; setView
               <span style={{ fontSize: 12.5, fontWeight: 600, color: fhe ? "#4c1d95" : "#5b5b66" }}>{fhe ? "FHE" : "Privacy"}</span>
             </div>
 
-            {/* RPC */}
-            <button onClick={onOpenRpc} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 999, border: "1px solid #e7e7ec", background: "white", fontSize: 12, color: "#5b5b66", fontWeight: 500, cursor: "pointer" }}>
+            {/* Cluster badge — fixed at build time by NEXT_PUBLIC_SOLANA_CLUSTER */}
+            <div title={`Cluster: ${preset}`} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 999, border: "1px solid #e7e7ec", background: "white", fontSize: 12, color: "#5b5b66", fontWeight: 500, cursor: "default", userSelect: "none" }}>
               <span className="pulse-dot" style={{ width: 6, height: 6 }} />
               <span className="rpc-btn-text">{preset === "mainnet" ? "Mainnet" : preset === "localnet" ? "Local" : "Devnet"}</span>
-            </button>
+            </div>
 
             {/* Admin link - desktop */}
             <Link href="/dapp/admin" className="nav-pill" style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 999, border: "1px solid #e7e7ec", background: "white", fontSize: 12, color: "#5b5b66", fontWeight: 600, textDecoration: "none" }}>
@@ -629,7 +630,7 @@ const MobileTabBar = ({ view, setView }: { view: View; setView: (v: View) => voi
   </div>
 );
 
-// ─── Markets View ───────────���─────────────────────────────────────────────────
+// ─── Markets View ───────────────────────────────────────────────────────────────
 
 const MarketsView = ({ fhe, setModal, pools, poolsLoading, poolsError, refreshPools }: { fhe: boolean; setModal: (m: ModalState | null) => void; pools: PoolView[]; poolsLoading: boolean; poolsError: string | null; refreshPools: () => void }) => {
   const [selectedPool, setSelectedPool] = useState<PoolView | null>(null);
@@ -1537,7 +1538,7 @@ const FlashView = ({ connected, fhe, pools, pythPrices }: { connected: boolean; 
 const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; pools: PoolView[]; pythPrices: PythPrices }) => {
   const [unhealthy, setUnhealthy] = useState<UnhealthyPosition[]>([]);
   const [loading, setLoading] = useState(true);
-  const { liquidate, status, txSig, errorMsg, reset } = useVeilActions();
+  const { liquidate, crossLiquidate, status, txSig, errorMsg, reset } = useVeilActions();
   const rpc = useSolanaRpc();
 
   useEffect(() => {
@@ -1618,8 +1619,29 @@ const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; p
                       <button
                         className="btn-supply"
                         style={{ fontSize: 11, padding: "5px 12px", background: "#dc2626" }}
-                        disabled={!connected || ["building", "signing", "confirming"].includes(status)}
-                        onClick={() => { reset(); liquidate(pool, new PublicKey(pos.owner)); }}
+                        disabled={!connected || ["building", "signing", "confirming"].includes(status) || borrows === 0n}
+                        onClick={() => {
+                          reset();
+                          // Find this borrower's collateral pools (their other positions
+                          // with non-zero deposits) so we can route cross-collateralized
+                          // debt to the cross_liquidate instruction.
+                          const owner = pos.owner;
+                          const collateralFromUnhealthy = enriched.filter((e) =>
+                            e.pos.owner === owner && e.pool.poolAddress.toBase58() !== pool.poolAddress.toBase58() && e.deposits > 0n,
+                          );
+                          if (collateralFromUnhealthy.length === 0) {
+                            // Single-pool: borrower has deposit AND debt in the same pool.
+                            liquidate(pool, new PublicKey(owner));
+                          } else {
+                            // Cross-collateralized: seize from the first collateral pool;
+                            // pass the rest as `otherPools` for HF aggregation.
+                            const seize = collateralFromUnhealthy[0].pool;
+                            const others = collateralFromUnhealthy.slice(1).map((e) => e.pool);
+                            // Repay 50% of debt — close-factor cap is 50%; pass exact debt to repay all.
+                            const repayAmount = borrows / 2n;
+                            crossLiquidate(pool, seize, new PublicKey(owner), others, repayAmount);
+                          }
+                        }}
                       >
                         Liquidate
                       </button>
@@ -1649,7 +1671,7 @@ const LiquidateView = ({ connected, pools, pythPrices }: { connected: boolean; p
   );
 };
 
-// ─── History View ───────��───────────────────────────���─────────────────────────
+// ─── History View ────────────────────────────────────────────────────────────────
 
 const HISTORY_ACTION_COLOR: Record<string, string> = {
   deposit: "#059669", withdraw: "#7c3aed", borrow: "#0284c7", repay: "#16a34a",
@@ -2002,9 +2024,22 @@ const pgBtn = (disabled: boolean): CSSProperties => ({
   color: disabled ? "#d1d5db" : "#5b5b66", cursor: disabled ? "default" : "pointer",
 });
 
-// ─── Ika dWallet Setup Modal ───────────────��──────────────────────────────────
+// ─── Ika dWallet Setup Modal ───────────────────────────────────────────────────
 
 type IkaStep = "create" | "transfer" | "register" | "done";
+
+/**
+ * Parse a USD-dollar string into u64 cents. Accepts "1234", "1234.56",
+ * "1,234.50". Returns null on bad input or anything that overflows u64.
+ */
+function parseUsdToCents(input: string): bigint | null {
+  const cleaned = input.replace(/[,_\s]/g, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
+  const [whole, frac = ""] = cleaned.split(".");
+  const cents = BigInt(whole) * 100n + BigInt((frac + "00").slice(0, 2));
+  if (cents > (1n << 64n) - 1n) return null;
+  return cents;
+}
 
 const IKA_STEPS: { id: IkaStep; label: string; desc: string }[] = [
   { id: "create", label: "Create dWallet", desc: "Run 2PC-MPC distributed key generation via the Ika network" },
@@ -2031,10 +2066,13 @@ const IkaStepIcon = ({ step, current, done }: { step: IkaStep; current: IkaStep;
 };
 
 const IkaSetupModal = ({ pool, setModal }: { pool: PoolView; setModal: (m: ModalState | null) => void }) => {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey } = useWallet();
   const rpc = useSolanaRpc();
+  const ika = useIkaActions();
   const [step, setStep] = useState<IkaStep>("create");
   const [dwalletAddr, setDwalletAddr] = useState("");
+  const [dwallet, setDwallet] = useState<PublicKey | null>(null);
+  const [usdValueStr, setUsdValueStr] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [txSig, setTxSig] = useState("");
@@ -2043,33 +2081,42 @@ const IkaSetupModal = ({ pool, setModal }: { pool: PoolView; setModal: (m: Modal
   const ltv = wadToPctNum(pool.ltvWad);
   const liqTh = wadToPctNum(pool.liquidationThresholdWad);
 
+  // Pre-alpha defaults to Curve25519 + Ed25519 — the only fully-mocked path
+  // in the current Ika network. Real BTC/ETH (secp256k1 + ECDSA-Sha256) will
+  // light up once the protocol moves past mock signers.
+  const curve = DWalletCurve.Curve25519;
+  const sigScheme = SignatureScheme.EddsaSha512;
+
   const handleCreate = async () => {
     if (!publicKey) return;
     setBusy(true); setErr("");
     try {
-      await new Promise((r) => setTimeout(r, 2000));
-      setDwalletAddr(publicKey.toBase58().slice(0, 8) + "…dWallet");
+      const dkg = await ika.runDkg();
+      setDwallet(dkg.dwallet);
+      setDwalletAddr(dkg.dwallet.toBase58());
       setStep("transfer");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : "DKG failed"); }
     finally { setBusy(false); }
   };
 
   const handleTransfer = async () => {
-    if (!publicKey || !sendTransaction) return;
+    if (!publicKey || !dwallet) return;
     setBusy(true); setErr("");
     try {
-      await new Promise((r) => setTimeout(r, 1500));
+      await ika.transferAuthority(dwallet);
       setStep("register");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : "Transfer failed"); }
     finally { setBusy(false); }
   };
 
   const handleRegister = async () => {
-    if (!publicKey || !sendTransaction) return;
+    if (!publicKey || !dwallet) return;
+    const cents = parseUsdToCents(usdValueStr);
+    if (cents === null) { setErr("Enter a USD value (cents)"); return; }
     setBusy(true); setErr("");
     try {
-      await new Promise((r) => setTimeout(r, 1800));
-      setTxSig("5KgR…mock");
+      const { signature } = await ika.registerCollateral(pool, dwallet, curve, sigScheme, cents);
+      setTxSig(signature);
       setStep("done");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : "Registration failed"); }
     finally { setBusy(false); }
@@ -2109,14 +2156,22 @@ const IkaSetupModal = ({ pool, setModal }: { pool: PoolView; setModal: (m: Modal
       <div>
         <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12.5, color: "#065f46" }}>✓ Authority transferred to Veil CPI PDA</div>
         <div style={{ fontSize: 13, color: "#5b5b66", lineHeight: 1.7, marginBottom: 16 }}>Register the dWallet as collateral on Veil.</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
-          {[{ k: "Collateral", v: `${pool.symbol} (native)` }, { k: "Max LTV", v: `${ltv}%` }, { k: "Liq. at", v: `${liqTh}%` }, { k: "Curve", v: "secp256k1" }].map((r, i) => (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+          {[{ k: "Collateral", v: `${pool.symbol} (native)` }, { k: "Max LTV", v: `${ltv}%` }, { k: "Liq. at", v: `${liqTh}%` }, { k: "Curve", v: "Curve25519" }].map((r, i) => (
             <div key={i} style={{ background: "#f9f9fb", borderRadius: 8, padding: "8px 10px", border: "1px solid #f0f0f3" }}>
               <div style={{ fontSize: 10.5, color: "#9ca3af", fontWeight: 500, marginBottom: 2 }}>{r.k}</div>
               <div style={{ fontSize: 13, fontWeight: 700 }}>{r.v}</div>
             </div>
           ))}
         </div>
+        <label style={{ display: "block", fontSize: 11, color: "#9ca3af", fontWeight: 500, marginBottom: 4 }}>USD value of native collateral</label>
+        <input
+          value={usdValueStr}
+          onChange={(e) => setUsdValueStr(e.target.value)}
+          placeholder="e.g. 30000.00"
+          inputMode="decimal"
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e7e7ec", fontSize: 13.5, marginBottom: 14, fontFamily: "var(--font-mono),monospace" }}
+        />
         <button disabled={busy} onClick={handleRegister} style={{ width: "100%", padding: "11px", borderRadius: 12, background: accentBg, color: "white", border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
           {busy ? "Registering…" : `Register ${pool.symbol} collateral`}
         </button>
@@ -2467,25 +2522,15 @@ const ActionModal = ({ modal, setModal, fhe, onSubmit, pythPrices }: ActionModal
           </div>
         )}
 
-        {isPrivate ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ background: "linear-gradient(135deg,#ede9fe,#fdf2ff)", border: "1px solid #c4b5fd", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}>
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="#6d28d9"><path d="M8 1.5a3 3 0 00-3 3V7H4a1 1 0 00-1 1v5.5a1 1 0 001 1h8a1 1 0 001-1V8a1 1 0 00-1-1h-1V4.5a3 3 0 00-3-3z" /></svg>
-              <span style={{ fontSize: 12.5, color: "#4c1d95", fontWeight: 500 }}>FHE private operations coming soon.</span>
-            </div>
-            <button disabled style={{ width: "100%", padding: "11px", borderRadius: 12, background: "linear-gradient(135deg,#6d28d9,#9333ea)", color: "rgba(255,255,255,.6)", border: "none", fontSize: 14, fontWeight: 700, cursor: "not-allowed", opacity: 0.65 }}>Coming Soon</button>
-          </div>
-        ) : (
-          <button disabled={!amount} onClick={handleConfirm} style={{ width: "100%", padding: "11px", borderRadius: 12, background: amount ? btnBg : "#e7e7ec", color: amount ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: amount ? "pointer" : "not-allowed", transition: "all .2s" }}>
-            {type === "supply" ? `Supply${poolType === "ika" ? " via Ika" : ""}` : type === "borrow" ? `Borrow ${pool.symbol}` : type === "withdraw" ? `Withdraw ${pool.symbol}` : `Repay ${pool.symbol}`}
-          </button>
-        )}
+        <button disabled={!amount} onClick={handleConfirm} style={{ width: "100%", padding: "11px", borderRadius: 12, background: amount ? btnBg : "#e7e7ec", color: amount ? "white" : "#9ca3af", border: "none", fontSize: 14, fontWeight: 700, cursor: amount ? "pointer" : "not-allowed", transition: "all .2s" }}>
+          {type === "supply" ? `Supply${poolType === "ika" ? " via Ika" : ""}` : type === "borrow" ? `Borrow ${pool.symbol}` : type === "withdraw" ? `Withdraw ${pool.symbol}` : `Repay ${pool.symbol}`}
+        </button>
       </div>
     </div>
   );
 };
 
-// ─── App Root ───────────���─────────────────────────────────────────────────────
+// ─── App Root ───────────────────────────────────────────────────────────────────
 
 export default function DAppPage() {
   const { publicKey } = useWallet();
@@ -2496,7 +2541,6 @@ export default function DAppPage() {
   const [view, setView] = useState<View>("markets");
   const [fhe, setFhe] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [rpcDrawerOpen, setRpcDrawerOpen] = useState(false);
   const [portfolioRefreshKey, setPortfolioRefreshKey] = useState(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastIdRef = useRef(0);
@@ -2610,7 +2654,7 @@ export default function DAppPage() {
       <div aria-hidden style={{ position: "fixed", inset: 0, pointerEvents: "none" }} className="page-bg" />
       <div aria-hidden className="grid-bg" style={{ position: "fixed", inset: 0, pointerEvents: "none", opacity: 0.5 }} />
 
-      <AppNav view={view} setView={setView} fhe={fhe} setFhe={setFhe} onOpenRpc={() => setRpcDrawerOpen(true)} />
+      <AppNav view={view} setView={setView} fhe={fhe} setFhe={setFhe} />
 
       <main className="dapp-main">
         {view === "markets" && <MarketsView fhe={fhe} setModal={setModal} pools={pools} poolsLoading={poolsLoading} poolsError={poolsError} refreshPools={refreshPools} />}
@@ -2620,7 +2664,6 @@ export default function DAppPage() {
         {view === "history" && <HistoryView connected={connected} pools={pools} />}
       </main>
 
-      <RpcSwitcher open={rpcDrawerOpen} onClose={() => setRpcDrawerOpen(false)} />
       {modal && modal.type === "ika-setup" ? (
         <IkaSetupModal pool={modal.pool} setModal={setModal} />
       ) : modal && (
