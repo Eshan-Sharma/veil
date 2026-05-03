@@ -34,6 +34,13 @@ This produces `programs/target/deploy/veil_lending.so`.
 
 ### Deploy
 
+<Callout type="warn">
+  Deploy commands default to your `solana config get` URL. Always pass
+  `--url devnet` (or `--url localhost`) explicitly. **Never deploy a build
+  with `--features testing` to mainnet** — it ships the MockOracle / MockFees
+  instructions and a hardcoded mock-admin override.
+</Callout>
+
 ```bash
 solana program deploy \
   programs/target/deploy/veil_lending.so \
@@ -73,17 +80,39 @@ every state transition. A failing test is a deploy blocker.
 Create a project at [neon.tech](https://neon.tech). Copy the pooled
 connection string — it must include `?sslmode=require`.
 
+<Callout type="info">
+  **Cluster-scoped rows, single DB OK in dev.** Tables that hold on-chain
+  state (`pools`, `positions`, `tx_log`, `audit_log`) carry a `cluster`
+  column. The dApp filters reads and stamps writes with the active
+  `NEXT_PUBLIC_SOLANA_CLUSTER`, so you can point all three local builds at
+  one Neon project without rows colliding. For **production** you should
+  still point mainnet at its own dedicated database — column scoping makes
+  mistakes loud rather than catastrophic, but full isolation is cheaper
+  insurance than a recovery.
+</Callout>
+
 ### Configure environment
 
 Create `veil-landing/.env.local` (gitignored). Required keys:
 
 ```bash
-DATABASE_URL=postgresql://USER:PASS@HOST/DB?sslmode=require&channel_binding=require
-SUPER_ADMIN_PUBKEY=<base58 wallet that bootstraps the allowlist>
-
-NEXT_PUBLIC_VEIL_PROGRAM_ID=<from step 1>
+# Pins the build to a single cluster. On Vercel set this per environment
+# (Production = mainnet, Preview = devnet).
 NEXT_PUBLIC_SOLANA_CLUSTER=devnet
-NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
+
+# Program ID for the active cluster. Next.js inlines this at build time, so
+# each Vercel environment carries the deploy id matching its cluster.
+NEXT_PUBLIC_VEIL_PROGRAM_ID=<deploy id for this cluster>
+
+# Server-only secrets. One DATABASE_URL is enough — rows are scoped by the
+# `cluster` column. For production, use a dedicated mainnet database.
+DATABASE_URL=postgresql://USER:PASS@HOST/veil?sslmode=require
+SUPER_ADMIN_PUBKEY=<base58 wallet>
+
+# Server-side RPC overrides (defaults: public Solana RPCs / 127.0.0.1:8899)
+MAINNET_RPC=
+DEVNET_RPC=
+LOCALNET_RPC=
 
 # Optional per-asset mints (overrides defaults in lib/veil constants)
 NEXT_PUBLIC_SOL_MINT=So11111111111111111111111111111111111111112
@@ -92,8 +121,9 @@ NEXT_PUBLIC_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
 ```
 
 <Callout type="warning">
-  `DATABASE_URL` is server-only. Do **not** prefix it with `NEXT_PUBLIC_` —
-  doing so leaks the secret into the client bundle.
+  `DATABASE_URL` and `SUPER_ADMIN_PUBKEY` are server-only. Do **not** prefix
+  either with `NEXT_PUBLIC_` — that would leak the secret into the client
+  bundle.
 </Callout>
 
 ### Run the migration

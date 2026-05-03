@@ -124,6 +124,33 @@ The signed `action` is `add_admin:<pubkey>:<role>`.
 | 401 | `not authorized` | Actor not in pool_admins (or revoked) |
 | 401 | `super_admin required` | Actor is pool_admin, not super_admin |
 
+### `GET /api/admin/audit?actor=<pubkey>&action=<action>&limit=50`
+
+Read the admin audit log. Public on devnet/localnet; on mainnet the response
+is gated behind a signed nonce (same `actor` / `nonce` / `signature` headers
+as the allowlist endpoints) and otherwise returns `403 forbidden`.
+
+Filters: `actor` (admin pubkey), `action` (e.g. `init_pool`, `update_pool`,
+`pause`, `collect_fees`, `add_admin`, `revoke_admin`). `limit` defaults 50,
+max 200.
+
+**Response**
+
+```json
+{
+  "entries": [
+    {
+      "id":         42,
+      "actor":      "...",
+      "action":     "update_pool",
+      "target":     "...pool...",
+      "details":    { "field": "value" },
+      "created_at": "..."
+    }
+  ]
+}
+```
+
 ### `DELETE /api/admin/allowlist`
 
 Soft-revoke a wallet (sets `revoked_at = now()`). **Requires `super_admin`
@@ -276,6 +303,96 @@ Cached positions for a wallet, sorted by `last_synced_at DESC`.
   and the liquidator UI can scan unhealthy positions efficiently.
 </Callout>
 
+### `GET /api/positions/[user]/detail`
+
+Enriched per-position view: joins `positions` ⨯ `pools` ⨯ recent `tx_log`,
+and computes deposit/debt token values, principal+interest split, supply/borrow
+APYs, and the **account-level** health factor across cross-collateralized pools.
+
+**Response (per position)**
+
+```json
+{
+  "positions": [
+    {
+      "pool_address":      "...",
+      "symbol":             "USDC",
+      "deposit_shares":     "0",
+      "borrow_principal":   "1500000000",
+      "deposit_tokens":     "0",
+      "borrow_debt":        "1500004153",
+      "original_deposit":   "0",
+      "principal":          "1500000000",
+      "interest":           "4153",
+      "supply_apy":         2.8,
+      "borrow_apy":         5.5,
+      "borrow_txs":         [{ "signature": "...", "amount": "...", "created_at": "..." }],
+      "health_factor_wad":  "625004153360933801"
+    }
+  ]
+}
+```
+
+The `health_factor_wad` is the **account-level** HF (Σ collateral × liq_threshold ÷ Σ debt) replicated on every row, not per-pool. This is the same value used by `/api/positions/unhealthy`.
+
+### `POST /api/positions/sync`
+
+Refresh a single (user, pool) position from on-chain into the DB. Reads the
+on-chain `UserPosition` and `LendingPool` accounts via the server-side RPC
+(`serverRpcUrl()` from `lib/network.ts` — never user-supplied), recomputes the
+HF, and upserts. The dApp calls this after every successful action so the
+indexed views stay current.
+
+**Request**
+
+```json
+{ "pool_address": "...", "user": "..." }
+```
+
+**Response**
+
+```json
+{ "ok": true, "exists": true, "position_address": "..." }
+```
+
+If the position no longer exists on-chain, the row is removed from the DB and
+`exists` returns `false`. Both accounts must be owned by the Veil program;
+otherwise the call returns `400 invalid`.
+
+### `GET /api/positions/unhealthy?pool=<pool>&limit=50`
+
+Return all positions belonging to wallets whose **account-level** HF is below
+1.0 WAD (i.e. liquidatable). Sorted by HF ascending so the most underwater
+positions come first. Both deposit and borrow rows for an unhealthy owner are
+returned so a liquidator UI can show the cross-collateral picture.
+
+`limit` defaults to 50 and is clamped to 200. Filtering by `pool` keeps only
+debt rows in the named pool.
+
+**Response**
+
+```json
+{
+  "positions": [
+    {
+      "position_address":            "...",
+      "pool_address":                "...",
+      "owner":                       "...",
+      "deposit_shares":              "5000000",
+      "borrow_principal":            "0",
+      "health_factor_wad":           "625004153360933801",
+      "account_health_factor_wad":   "625004153360933801"
+    }
+  ]
+}
+```
+
+The HF math uses `pools.oracle_price`, `oracle_expo`, `liquidation_threshold_wad`,
+and `decimals` columns. **`decimals` must be populated correctly per pool** —
+the setup scripts pass it on INSERT; legacy rows that defaulted to `9` will
+miscompute USD amounts by 10× (BTC) or 1000× (USDC/USDT) and leave underwater
+positions invisible to this endpoint.
+
 ---
 
 ## Transactions
@@ -325,6 +442,33 @@ the wallet returns a tx signature.
   "error_msg":    null
 }
 ```
+
+---
+
+## Health
+
+### `GET /api/health`
+
+System liveness probe. Returns DB latency, the current RPC slot, and counts
+of `pools` / `tx_log` rows under the active cluster. Used by uptime checks
+and as the first-debug step when something looks wrong end-to-end.
+
+**Response**
+
+```json
+{
+  "status":    "ok",
+  "timestamp": "2026-05-02T17:00:00.000Z",
+  "checks": {
+    "database": { "ok": true, "latencyMs": 38 },
+    "rpc":      { "ok": true, "slot": 452800123 },
+    "counts":   { "pools": 5, "tx_log": 142 }
+  }
+}
+```
+
+If any sub-check fails, `status: "degraded"` is returned with `200 OK` so a
+caller can distinguish "infra reachable but unhealthy" from "veil API itself down".
 
 ---
 
