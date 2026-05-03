@@ -92,6 +92,7 @@ type HFTone = "ok" | "warn" | "err" | "muted";
 export function formatHF(raw: string | null): { label: string; tone: HFTone } {
   if (!raw) return { label: "—", tone: "muted" };
   const v = BigInt(raw);
+  if (v === 0n) return { label: "—", tone: "muted" };
   if (v >= 1n << 100n) return { label: "∞", tone: "ok" };
   const whole = v / WAD;
   const frac = ((v % WAD) * 100n) / WAD;
