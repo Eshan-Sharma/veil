@@ -45,11 +45,13 @@ export type UserPosition = {
   pool: PublicKey;                 // [40..72]
   depositShares: bigint;           // [72..80]
   borrowPrincipal: bigint;         // [80..88]
-  // _pad0 [88..96]
+  crossSetId: bigint;              // [88..96]  u64 — registry id, 0 if not cross-linked
   depositIndexSnapshot: bigint;    // [96..112] u128
   borrowIndexSnapshot: bigint;     // [112..128] u128
   bump: number;                    // [128]
-  // _pad_end [129..144]
+  crossCollateral: number;         // [129] u8 — non-zero when used as cross collateral
+  crossCount: number;              // [130] u8 — total positions in this cross-set
+  // _pad_end [131..144]
 };
 
 // Use DataView for browser + Node compatibility (Buffer.readBigUInt64LE is Node-only)
@@ -126,9 +128,12 @@ export function decodeUserPosition(data: Buffer | Uint8Array): UserPosition {
     pool: new PublicKey(data.slice(40, 72)),
     depositShares: readU64LE(data, 72),
     borrowPrincipal: readU64LE(data, 80),
+    crossSetId: readU64LE(data, 88),
     depositIndexSnapshot: readU128LE(data, 96),
     borrowIndexSnapshot: readU128LE(data, 112),
     bump: data[128],
+    crossCollateral: data[129],
+    crossCount: data[130],
   };
 }
 

@@ -48,9 +48,9 @@ use pinocchio_token::instructions::Transfer;
 
 use crate::{
     errors::LendError,
-    fhe::context::EncryptContext,
+    fhe::context::{verify_ciphertext_owner, EncryptContext, CPI_AUTHORITY_SEED},
     math,
-    state::{EncryptedPosition, LendingPool, UserPosition},
+    state::{encrypted_position::ENC_POS_SEED, EncryptedPosition, LendingPool, UserPosition},
 };
 
 pub struct PrivateWithdraw {
@@ -71,7 +71,7 @@ impl PrivateWithdraw {
         })
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 20 {
             return Err(LendError::InvalidInstructionData.into());
         }
@@ -95,6 +95,30 @@ impl PrivateWithdraw {
             enc_pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             enc_pos.verify_deposit_ct(&accounts[6])?;
             enc_pos.verify_debt_ct(&accounts[7])?;
+
+            // Re-derive the EncryptedPosition PDA from its stored bump.
+            let expected_enc_pos = Address::derive_address(
+                &[
+                    ENC_POS_SEED,
+                    accounts[0].address().as_ref(),
+                    accounts[3].address().as_ref(),
+                ],
+                Some(enc_pos.bump),
+                program_id,
+            );
+            if expected_enc_pos != *accounts[5].address() {
+                return Err(LendError::InvalidPda.into());
+            }
+        }
+
+        // ── Validate cpi_authority bump matches the supplied PDA address ────
+        let expected_cpi = Address::derive_address(
+            &[CPI_AUTHORITY_SEED],
+            Some(self.cpi_auth_bump),
+            program_id,
+        );
+        if expected_cpi != *accounts[15].address() {
+            return Err(LendError::InvalidPda.into());
         }
 
         // ── Compute withdrawal amount and check HF (plaintext) ────────────
@@ -176,13 +200,16 @@ impl PrivateWithdraw {
         };
 
         // Create a plaintext ciphertext for the withdrawn token amount.
-        ctx.create_plaintext_u64_stub(token_amount, &accounts[8])?;
+        ctx.create_plaintext_u64(token_amount, &accounts[8])?;
+        verify_ciphertext_owner(&accounts[8])?;
 
         // enc_deposit ← enc_deposit - token_amount  (saturates at 0).
         ctx.sub_deposit(&accounts[6], &accounts[8], &accounts[6])?;
+        verify_ciphertext_owner(&accounts[6])?;
 
         // Async HF check over encrypted data.
         ctx.is_healthy(&accounts[6], &accounts[7], &accounts[9])?;
+        verify_ciphertext_owner(&accounts[9])?;
 
         Ok(())
     }

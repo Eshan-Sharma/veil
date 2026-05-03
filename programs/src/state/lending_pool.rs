@@ -1,7 +1,9 @@
 /*!
 `LendingPool` — one account per token market.
 
-Layout (repr C, 408 bytes, 16-byte aligned throughout):
+Layout (repr C, 432 bytes, 16-byte aligned throughout — repr(C) rounds the
+struct's overall size up to the largest field alignment, which is 16 for
+the u128 fields, so the trailing _pad3 is mandatory):
 
 | offset | size | field                  |
 |--------|------|------------------------|
@@ -37,8 +39,11 @@ Layout (repr C, 408 bytes, 16-byte aligned throughout):
 | 384    |   8  | oracle_price           |
 | 392    |   8  | oracle_conf            |
 | 400    |   4  | oracle_expo            |
-| 404    |  12  | _oracle_pad            |
-| 416    |      | (end)                  |
+| 404    |   4  | _pad2                  |
+| 408    |   8  | max_ika_usd_cents      |
+| 416    |   8  | oracle_updated_at      |
+| 424    |   8  | _pad3                  |
+| 432    |      | (end)                  |
 */
 
 use crate::math::WAD;
@@ -110,12 +115,31 @@ pub struct LendingPool {
     pub oracle_conf: u64,
     /// Price exponent (negative — price_usd = oracle_price × 10^oracle_expo).
     pub oracle_expo: i32,
-    pub _oracle_pad: [u8; 12],
+    pub _pad2: [u8; 4],
+
+    // ── Ika cross-chain collateral cap ────────────────────────────────────
+    /// Per-position cap on the USD value (in cents) an `IkaDwalletPosition`
+    /// can claim against this pool. Defaults to 0 — Ika collateral is
+    /// disabled until the pool authority opts in via `SetIkaCollateralCap`.
+    /// Closes the "register at u64::MAX, drain vault" attack vector.
+    pub max_ika_usd_cents: u64,
+
+    // ── Oracle freshness ──────────────────────────────────────────────────
+    /// Unix timestamp of the most recent successful `update_oracle_price`
+    /// call. Liquidation paths require this to be within `MAX_ORACLE_AGE`
+    /// of the current slot's clock to prevent attackers from replaying a
+    /// stale-but-favourable cached price across liquidation events.
+    pub oracle_updated_at: i64,
+
+    /// Trailing pad to keep `core::mem::size_of::<LendingPool>()` aligned
+    /// to the 16-byte alignment requirement imposed by the u128 fields.
+    /// Without it, repr(C) rounds the struct size up to 432 implicitly.
+    pub _pad3: [u8; 8],
 }
 
 impl LendingPool {
     pub const DISCRIMINATOR: [u8; 8] = *b"VEILPOOL";
-    pub const SIZE: usize = 416;
+    pub const SIZE: usize = 432;
 
     // ── Zero-copy account access ──────────────────────────────────────────
 

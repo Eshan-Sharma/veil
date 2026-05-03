@@ -40,8 +40,8 @@ use pinocchio::{
 
 use crate::{
     errors::LendError,
-    fhe::context::EncryptContext,
-    state::{EncryptedPosition, LendingPool, UserPosition},
+    fhe::context::{verify_ciphertext_owner, EncryptContext, CPI_AUTHORITY_SEED},
+    state::{encrypted_position::ENC_POS_SEED, EncryptedPosition, LendingPool, UserPosition},
 };
 
 pub struct EnablePrivacy {
@@ -62,12 +62,42 @@ impl EnablePrivacy {
         })
     }
 
-    pub fn process(self, _program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
+    pub fn process(self, program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
         if accounts.len() < 14 {
             return Err(LendError::InvalidInstructionData.into());
         }
         if !accounts[0].is_signer() {
             return Err(LendError::MissingSignature.into());
+        }
+
+        // ── Re-derive the EncryptedPosition PDA from owner+pool ─────────────
+        // Without this, a caller could pass *any* writable account as
+        // `encrypted_position` and the instruction would happily call
+        // `EncryptedPosition::init` on it, overwriting unrelated state.
+        let expected_enc_pos = Address::derive_address(
+            &[
+                ENC_POS_SEED,
+                accounts[0].address().as_ref(),
+                accounts[5].address().as_ref(),
+            ],
+            Some(self.enc_pos_bump),
+            program_id,
+        );
+        if expected_enc_pos != *accounts[2].address() {
+            return Err(LendError::InvalidPda.into());
+        }
+
+        // ── Validate cpi_authority bump matches the supplied PDA address ────
+        // We pass `cpi_auth_bump` straight to the Encrypt CPI; if the bump
+        // didn't actually derive `accounts[9]`, the inner CPI signing would
+        // either fail in confusing ways or, worse, sign a different PDA.
+        let expected_cpi = Address::derive_address(
+            &[CPI_AUTHORITY_SEED],
+            Some(self.cpi_auth_bump),
+            program_id,
+        );
+        if expected_cpi != *accounts[9].address() {
+            return Err(LendError::InvalidPda.into());
         }
 
         if accounts[2].data_len() >= EncryptedPosition::SIZE {
@@ -116,9 +146,15 @@ impl EnablePrivacy {
 
         // ── Initialise ciphertext accounts via Encrypt CPI ────────────────
         // Creates enc_deposit_ct with value = current deposit balance.
-        ctx.create_plaintext_u64_stub(deposit_balance, &accounts[3])?;
+        ctx.create_plaintext_u64(deposit_balance, &accounts[3])?;
+        // After the CPI returns, the ciphertext account MUST be owned by the
+        // Encrypt program. If it isn't, the CPI silently no-op'd (e.g. stub
+        // build) or was redirected; treating it as a real ciphertext below
+        // would store an attacker-controlled key in the EncryptedPosition.
+        verify_ciphertext_owner(&accounts[3])?;
         // Creates enc_debt_ct with value = current debt balance.
-        ctx.create_plaintext_u64_stub(debt_balance, &accounts[4])?;
+        ctx.create_plaintext_u64(debt_balance, &accounts[4])?;
+        verify_ciphertext_owner(&accounts[4])?;
 
         // ── Create EncryptedPosition account ──────────────────────────────
         let enc_deposit_key = *accounts[3].address().as_array();

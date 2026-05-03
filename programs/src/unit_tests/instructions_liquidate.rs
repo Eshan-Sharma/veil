@@ -62,7 +62,7 @@ fn liquidate_terms_reject_when_seizure_exceeds_deposit() {
 fn liquidate_terms_compute_expected_amounts() {
     let pool = pool_with_defaults();
     let pos = position(1_000, 900);
-    let (repay_amount, liquidator_gets, protocol_fee, seized_shares, authority_bump) =
+    let (repay_amount, liquidator_gets, protocol_fee, seized_shares, authority_bump, total_debt) =
         compute_liquidation_terms(&pool, &pos).unwrap();
 
     assert_eq!(repay_amount, 450);
@@ -70,6 +70,7 @@ fn liquidate_terms_compute_expected_amounts() {
     assert_eq!(liquidator_gets, 425);
     assert_eq!(seized_shares, 472);
     assert_eq!(authority_bump, 7);
+    assert_eq!(total_debt, 900);
 }
 
 #[test]

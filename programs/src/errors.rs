@@ -89,6 +89,11 @@ pub enum LendError {
     NotMockAdmin,
     /// FlashRepay was not found in the same transaction as FlashBorrow.
     FlashRepayMissing,
+    /// Pool's `max_ika_usd_cents` is 0 — Ika collateral is disabled here
+    /// until the pool authority opts in via `SetIkaCollateralCap`.
+    IkaCollateralDisabled,
+    /// Requested Ika USD value exceeds the pool's per-position cap.
+    IkaCollateralExceedsCap,
 }
 
 impl From<LendError> for ProgramError {

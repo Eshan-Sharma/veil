@@ -11,7 +11,8 @@ use crate::instructions::{
     Borrow, CollectFees, CrossBorrow, CrossLiquidate, CrossRepay, CrossWithdraw, Deposit,
     EnablePrivacy, FlashBorrow, FlashRepay, IkaRegister, IkaRelease, IkaSign, InitPosition,
     Initialize, Liquidate, PausePool, PrivateBorrow, PrivateDeposit, PrivateRepay,
-    PrivateWithdraw, Repay, ResumePool, SetPoolDecimals, UpdateOraclePrice, UpdatePool, Withdraw,
+    PrivateWithdraw, Repay, ResumePool, SetIkaCollateralCap, SetPoolDecimals, UpdateOraclePrice,
+    UpdatePool, Withdraw,
 };
 #[cfg(feature = "testing")]
 use crate::instructions::MockFees;
@@ -59,6 +60,7 @@ pub fn process_instruction(
         CrossRepay::DISCRIMINATOR        => CrossRepay::from_data(rest)?.process(program_id, accounts),
         CrossLiquidate::DISCRIMINATOR    => CrossLiquidate::from_data(rest)?.process(program_id, accounts),
         InitPosition::DISCRIMINATOR      => InitPosition::from_data(rest)?.process(program_id, accounts),
+        SetIkaCollateralCap::DISCRIMINATOR => SetIkaCollateralCap::from_data(rest)?.process(program_id, accounts),
         #[cfg(feature = "testing")]
         MockFees::DISCRIMINATOR          => MockFees::process(program_id, accounts),
         #[cfg(feature = "testing")]

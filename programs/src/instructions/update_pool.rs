@@ -148,6 +148,18 @@ impl UpdatePool {
             }
         }
 
+        // ── Reject if pool has open positions ─────────────────────────────
+        // Re-pricing risk parameters under live deposits/borrows would
+        // retroactively re-value existing balances — e.g. dropping LTV on
+        // an outstanding borrow makes it instantly liquidatable through
+        // no fault of the user.
+        {
+            let pool = LendingPool::from_account(&accounts[1])?;
+            if pool.total_deposits != 0 || pool.total_borrows != 0 {
+                return Err(LendError::PoolNotEmpty.into());
+            }
+        }
+
         // ── Apply new parameters ──────────────────────────────────────────
         let pool = LendingPool::from_account_mut(&accounts[1])?;
         pool.base_rate             = self.base_rate;

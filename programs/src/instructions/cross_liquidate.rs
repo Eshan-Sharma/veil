@@ -35,6 +35,7 @@ use pinocchio_token::instructions::Transfer;
 
 use crate::{
     errors::LendError,
+    instructions::update_oracle_price::MAX_ORACLE_AGE,
     math,
     state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
@@ -156,10 +157,22 @@ impl CrossLiquidate {
         let clock = Clock::get()?;
         {
             let debt_pool = LendingPool::from_account_mut(&accounts[3])?;
+            // Per-tx oracle freshness gate (debt side).
+            if debt_pool.oracle_updated_at == 0
+                || clock.unix_timestamp.saturating_sub(debt_pool.oracle_updated_at) > MAX_ORACLE_AGE
+            {
+                return Err(LendError::OraclePriceStale.into());
+            }
             debt_pool.accrue_interest(clock.unix_timestamp)?;
         }
         {
             let coll_pool = LendingPool::from_account_mut(&accounts[6])?;
+            // Per-tx oracle freshness gate (collateral side).
+            if coll_pool.oracle_updated_at == 0
+                || clock.unix_timestamp.saturating_sub(coll_pool.oracle_updated_at) > MAX_ORACLE_AGE
+            {
+                return Err(LendError::OraclePriceStale.into());
+            }
             coll_pool.accrue_interest(clock.unix_timestamp)?;
         }
 
@@ -240,12 +253,23 @@ impl CrossLiquidate {
         }
         let num_pairs = trailing.len() / 2;
 
-        let (debt_set_id, debt_count, debt_cross) = {
+        let (debt_set_id, debt_count, _debt_cross, debt_principal) = {
             let pos = UserPosition::from_account(&accounts[4])?;
-            (pos.cross_set_id, pos.cross_count, pos.cross_collateral)
+            (
+                pos.cross_set_id,
+                pos.cross_count,
+                pos.cross_collateral,
+                pos.borrow_principal,
+            )
         };
 
-        if debt_cross != 0 {
+        // Enforce the cross-set count + set-id match for any debt-bearing
+        // position, regardless of whether the cross_collateral flag is
+        // currently set. Gating this on `debt_cross != 0` previously let an
+        // attacker bypass the count check by clearing the flag through some
+        // other path. Deposit-only collateral positions (no debt) don't go
+        // through this instruction so they're naturally excluded.
+        if debt_principal != 0 {
             let supplied: u8 = (num_pairs + 2)
                 .try_into()
                 .map_err(|_| ProgramError::InvalidArgument)?;
@@ -289,7 +313,7 @@ impl CrossLiquidate {
             let pool_addr = *accounts[p_idx].address();
             pos.verify_binding(&borrower_addr, &pool_addr)?;
 
-            if debt_cross != 0 && pos.cross_set_id != debt_set_id {
+            if debt_principal != 0 && pos.cross_set_id != debt_set_id {
                 return Err(LendError::CrossPositionCountMismatch.into());
             }
 
@@ -310,14 +334,28 @@ impl CrossLiquidate {
             }
         }
 
-        // ── Compute liquidation terms ────────────────────────────────────
-        let (repay, liquidator_gets, protocol_fee, seized_shares) = {
+        let (
+            repay,
+            liquidator_gets,
+            protocol_fee,
+            seized_shares,
+            total_debt,
+            debt_borrow_index,
+            coll_supply_index,
+            coll_bump,
+        ) = {
             let debt_pool = LendingPool::from_account(&accounts[3])?;
             let debt_pos = UserPosition::from_account(&accounts[4])?;
             let coll_pool = LendingPool::from_account(&accounts[6])?;
             let coll_pos = UserPosition::from_account(&accounts[7])?;
 
-            compute_cross_liquidation_terms(
+            let debt = math::current_borrow_balance(
+                debt_pos.borrow_principal,
+                debt_pool.borrow_index,
+                debt_pos.borrow_index_snapshot,
+            )?;
+
+            let (r, gets, fee, shares) = compute_cross_liquidation_terms(
                 debt_pool,
                 debt_pos,
                 coll_pool,
@@ -325,18 +363,16 @@ impl CrossLiquidate {
                 self.repay_amount,
                 global_collateral_usd,
                 global_debt_usd,
-            )?
+            )?;
+            (
+                r, gets, fee, shares, debt,
+                debt_pool.borrow_index, coll_pool.supply_index, coll_pool.authority_bump,
+            )
         };
 
-        // ── Step 1: liquidator repays debt → debt_vault ──────────────────
         Transfer::new(&accounts[1], &accounts[5], &accounts[0], repay).invoke()?;
 
-        // ── Step 2: collateral_vault → liquidator ────────────────────────
         let coll_pool_addr = *accounts[6].address();
-        let coll_bump = {
-            let coll_pool = LendingPool::from_account(&accounts[6])?;
-            coll_pool.authority_bump
-        };
         let bump_bytes = [coll_bump];
         let seeds: [Seed; 3] = [
             Seed::from(b"authority" as &[u8]),
@@ -348,38 +384,23 @@ impl CrossLiquidate {
         Transfer::new(&accounts[8], &accounts[2], &accounts[9], liquidator_gets)
             .invoke_signed(&[signer])?;
 
-        // ── Update debt position ─────────────────────────────────────────
         {
-            let debt_pool = LendingPool::from_account(&accounts[3])?;
-            let total_debt = {
-                let pos = UserPosition::from_account(&accounts[4])?;
-                math::current_borrow_balance(
-                    pos.borrow_principal,
-                    debt_pool.borrow_index,
-                    pos.borrow_index_snapshot,
-                )?
-            };
             let pos = UserPosition::from_account_mut(&accounts[4])?;
             pos.borrow_principal = total_debt.saturating_sub(repay);
-            pos.borrow_index_snapshot = debt_pool.borrow_index;
+            pos.borrow_index_snapshot = debt_borrow_index;
         }
 
-        // ── Update debt pool totals ──────────────────────────────────────
-        // Depositor claims unchanged by repay; interest already credited via accrue.
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             pool.total_borrows = pool.total_borrows.saturating_sub(repay);
         }
 
-        // ── Update collateral position ───────────────────────────────────
         {
-            let coll_pool = LendingPool::from_account(&accounts[6])?;
             let pos = UserPosition::from_account_mut(&accounts[7])?;
             pos.deposit_shares = pos.deposit_shares.saturating_sub(seized_shares);
-            pos.deposit_index_snapshot = coll_pool.supply_index;
+            pos.deposit_index_snapshot = coll_supply_index;
         }
 
-        // ── Update collateral pool totals ────────────────────────────────
         {
             let pool = LendingPool::from_account_mut(&accounts[6])?;
             pool.accumulated_fees = pool.accumulated_fees.saturating_add(protocol_fee);

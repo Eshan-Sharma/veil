@@ -77,25 +77,16 @@ impl CrossRepay {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?; // pool
-        check_program_owner(&accounts[4], program_id)?; // user_position
+        check_program_owner(&accounts[3], program_id)?;
+        check_program_owner(&accounts[4], program_id)?;
         check_token_program(&accounts[5])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
-            let pool = LendingPool::from_account_mut(&accounts[3])?;
-            pool.accrue_interest(clock.unix_timestamp)?;
-        }
-
-        // ── Compute repay amounts ────────────────────────────────────────
         let (repay_amount, new_debt, borrow_index) = {
-            let pool = LendingPool::from_account(&accounts[3])?;
+            let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
+            pool.accrue_interest(clock.unix_timestamp)?;
+
             let pos = UserPosition::from_account(&accounts[4])?;
             pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             compute_repay(pool, pos, self.amount)?

@@ -24,9 +24,17 @@ use veil_lending::{math::WAD, state::LendingPool};
 const ACCOUNT_HEADER: usize = 88;
 const BACKING_OFFSET: usize = 8; // data at 8+88=96 (multiple of 16)
 
+// Each integration test binary in `tests/` is compiled separately. Helpers
+// here are exercised by some binaries (e.g. `protocol_tests.rs`) and not by
+// others (e.g. `scenarios_ika_encrypt.rs`), so per-binary dead-code lints
+// fire spuriously. Suppress them at the API surface — the items ARE used,
+// just not by every test crate that pulls in this module.
+#[allow(dead_code)]
 pub struct RawAccount {
     backing: Vec<u128>,
 }
+
+#[allow(dead_code)]
 
 impl RawAccount {
     pub fn new(key: [u8; 32], is_signer: bool, is_writable: bool, data: &[u8]) -> Self {
@@ -75,6 +83,7 @@ impl RawAccount {
 
 // ── Convenience builders ──────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn pool_bytes(pool: &LendingPool) -> Vec<u8> {
     unsafe {
         core::slice::from_raw_parts(

@@ -29,6 +29,7 @@ use pinocchio_token::instructions::Transfer;
 
 use crate::{
     errors::LendError,
+    instructions::update_oracle_price::MAX_ORACLE_AGE,
     math,
     state::{check_program_owner, check_token_program, check_vault, LendingPool, UserPosition},
 };
@@ -39,7 +40,7 @@ pub struct Liquidate;
 pub(crate) fn compute_liquidation_terms(
     pool: &LendingPool,
     pos: &UserPosition,
-) -> Result<(u64, u64, u64, u64, u8), ProgramError> {
+) -> Result<(u64, u64, u64, u64, u8, u64), ProgramError> {
     if pos.borrow_principal == 0 {
         return Err(LendError::NoBorrow.into());
     }
@@ -51,17 +52,14 @@ pub(crate) fn compute_liquidation_terms(
         pos.borrow_index_snapshot,
     )?;
 
-    // Require HF < 1.0
     let hf = math::health_factor(deposit_balance, total_debt, pool.liquidation_threshold)?;
     if hf >= math::WAD {
         return Err(LendError::PositionHealthy.into());
     }
 
-    // repayAmount = totalDebt × closeFactor (50 %)
     let repay = math::wad_mul(total_debt as u128, pool.close_factor)? as u64;
     let repay = repay.min(total_debt);
 
-    // seizedCollateral = repayAmount × (1 + liquidationBonus)
     let one_plus_bonus = math::WAD
         .checked_add(pool.liquidation_bonus)
         .ok_or(ProgramError::ArithmeticOverflow)?;
@@ -81,6 +79,7 @@ pub(crate) fn compute_liquidation_terms(
         protocol_fee,
         seized_shares,
         pool.authority_bump,
+        total_debt,
     ))
 }
 
@@ -129,28 +128,36 @@ impl Liquidate {
             return Err(LendError::MissingSignature.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?; // pool
-        check_program_owner(&accounts[4], program_id)?; // borrower_position
+        check_program_owner(&accounts[3], program_id)?;
+        check_program_owner(&accounts[4], program_id)?;
         check_token_program(&accounts[6])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
+        let (
+            repay_amount,
+            liquidator_gets,
+            protocol_fee,
+            seized_shares,
+            authority_bump,
+            total_debt,
+            borrow_index,
+            supply_index,
+        ) = {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
+            // Per-tx oracle freshness gate. Without this, a liquidator could
+            // wait for the cached price to drift in their favour and trigger
+            // liquidation on a price that no longer reflects reality.
+            // oracle_updated_at == 0 means the pool was just initialised and
+            // no one has run update_oracle_price; treat that as stale.
+            if pool.oracle_updated_at == 0
+                || clock.unix_timestamp.saturating_sub(pool.oracle_updated_at) > MAX_ORACLE_AGE
+            {
+                return Err(LendError::OraclePriceStale.into());
+            }
             pool.accrue_interest(clock.unix_timestamp)?;
-        }
 
-        // ── Compute amounts ───────────────────────────────────────────────
-        let (repay_amount, liquidator_gets, protocol_fee, seized_shares, authority_bump) = {
-            let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
-            // Bind the position to the pool to prevent index-mismatch attacks
-            // (e.g. evaluating a Pool B position against Pool A's indices).
             if &pos.pool != accounts[3].address() {
                 return Err(ProgramError::InvalidAccountData);
             }
@@ -159,13 +166,15 @@ impl Liquidate {
             if &pos.owner == accounts[0].address() {
                 return Err(LendError::SelfLiquidation.into());
             }
-            compute_liquidation_terms(pool, pos)?
+            let (repay, gets, fee, shares, bump, debt) = compute_liquidation_terms(pool, pos)?;
+            (
+                repay, gets, fee, shares, bump, debt,
+                pool.borrow_index, pool.supply_index,
+            )
         };
 
-        // ── Step 1: liquidator repays debt → vault ────────────────────────
         Transfer::new(&accounts[1], &accounts[2], &accounts[0], repay_amount).invoke()?;
 
-        // ── Step 2: vault pays out collateral → liquidator ────────────────
         let pool_addr = *accounts[3].address();
         let bump_bytes = [authority_bump];
         let seeds: [Seed; 3] = [
@@ -178,20 +187,6 @@ impl Liquidate {
         Transfer::new(&accounts[2], &accounts[1], &accounts[5], liquidator_gets)
             .invoke_signed(&[signer])?;
 
-        // ── Update borrower position ──────────────────────────────────────
-        let (borrow_index, supply_index) = {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            (pool.borrow_index, pool.supply_index)
-        };
-        let total_debt = {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            let pos = UserPosition::from_account(&accounts[4])?;
-            math::current_borrow_balance(
-                pos.borrow_principal,
-                pool.borrow_index,
-                pos.borrow_index_snapshot,
-            )?
-        };
         {
             let pos = UserPosition::from_account_mut(&accounts[4])?;
             apply_liquidation_to_position(
@@ -204,7 +199,6 @@ impl Liquidate {
             );
         }
 
-        // ── Update pool totals ────────────────────────────────────────────
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             apply_liquidation_to_pool(pool, repay_amount, protocol_fee, liquidator_gets);

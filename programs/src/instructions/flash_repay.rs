@@ -48,17 +48,12 @@ impl FlashRepay {
             return Err(LendError::MissingSignature.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[3], program_id)?;
         check_token_program(&accounts[4])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Read loan details ─────────────────────────────────────────────
         let (loan_amount, fee, lp_fee, protocol_fee) = {
             let pool = LendingPool::from_account(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
 
             if pool.flash_loan_amount == 0 {
                 return Err(LendError::FlashLoanNotActive.into());
@@ -78,12 +73,22 @@ impl FlashRepay {
         Transfer::new(&accounts[1], &accounts[2], &accounts[0], repay_total).invoke()?;
 
         // ── Update pool state ─────────────────────────────────────────────
+        // Use checked_add for both fee writes so the LP and protocol updates
+        // succeed atomically (or the tx aborts). saturating_add could silently
+        // truncate the protocol's share while crediting LPs in full, leaving
+        // the pool's bookkeeping inconsistent.
         {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
             // LPs earn their share of the fee.
-            pool.total_deposits = pool.total_deposits.saturating_add(lp_fee);
+            pool.total_deposits = pool
+                .total_deposits
+                .checked_add(lp_fee)
+                .ok_or(LendError::MathOverflow)?;
             // Protocol earns its share.
-            pool.accumulated_fees = pool.accumulated_fees.saturating_add(protocol_fee);
+            pool.accumulated_fees = pool
+                .accumulated_fees
+                .checked_add(protocol_fee)
+                .ok_or(LendError::MathOverflow)?;
             // Loan is settled.
             pool.flash_loan_amount = 0;
         }

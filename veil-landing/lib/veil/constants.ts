@@ -2,35 +2,21 @@ import { PublicKey } from "@solana/web3.js";
 import { NETWORK } from "../network";
 
 /**
- * Network-keyed program ID resolution.
+ * Program ID is taken from `NEXT_PUBLIC_VEIL_PROGRAM_ID`. Each Vercel
+ * environment sets this to the program deployed on its target cluster; in
+ * local dev you flip it whenever you switch `NEXT_PUBLIC_SOLANA_CLUSTER`.
  *
- * Mainnet and devnet IDs are pinned at compile time so a misconfigured env can
- * never silently point production at the System Program (the old fallback).
- * Localnet is read from `NEXT_PUBLIC_VEIL_PROGRAM_ID` because every dev's
- * `solana program deploy` produces a fresh keypair.
- *
- * Update the placeholders below after the corresponding deploy:
- *   cargo build-sbf
- *   solana program deploy --url mainnet-beta target/deploy/veil_lending.so
+ * `NETWORK` is imported solely so this throws with the active cluster name
+ * in the error path — the resolution itself is single-source.
  */
-const MAINNET_PROGRAM_ID = "VeiLMainNetProgramId11111111111111111111111";
-const DEVNET_PROGRAM_ID = "VeiLDevnetProgramId111111111111111111111111";
-
 function resolveProgramId(): PublicKey {
-  if (NETWORK === "mainnet") {
-    return new PublicKey(MAINNET_PROGRAM_ID);
-  }
-  if (NETWORK === "devnet") {
-    return new PublicKey(DEVNET_PROGRAM_ID);
-  }
-  // localnet — must be set per-machine after deploy.
-  const env = process.env.NEXT_PUBLIC_VEIL_PROGRAM_ID;
-  if (!env) {
+  const id = process.env.NEXT_PUBLIC_VEIL_PROGRAM_ID;
+  if (!id) {
     throw new Error(
-      "NEXT_PUBLIC_VEIL_PROGRAM_ID is required when NEXT_PUBLIC_SOLANA_CLUSTER=localnet"
+      `NEXT_PUBLIC_VEIL_PROGRAM_ID is required (active cluster: ${NETWORK})`
     );
   }
-  return new PublicKey(env);
+  return new PublicKey(id);
 }
 
 export const PROGRAM_ID = resolveProgramId();

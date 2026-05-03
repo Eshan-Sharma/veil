@@ -8,25 +8,11 @@ details to validators, indexers, or RPC observers.
 
 # SDK status
 
-The Encrypt SDK (https://github.com/dwallet-labs/encrypt-pre-alpha) is
-pre-alpha and currently requires pinocchio 0.10.x.  Veil's core program
-targets 0.11.x.  This module implements the full architecture with the
-exact API shape the SDK expects.
-
-To activate real on-chain FHE once the SDK supports pinocchio 0.11+:
-
-1. Add to Cargo.toml [dependencies]:
-   ```toml
-   encrypt-types    = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha" }
-   encrypt-dsl      = { package = "encrypt-solana-dsl",
-                        git     = "https://github.com/dwallet-labs/encrypt-pre-alpha" }
-   encrypt-pinocchio = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha" }
-   ```
-2. Replace `fhe::context::EncryptContext` with `encrypt_pinocchio::EncryptContext`.
-3. Replace `fhe::context::EncryptContext::execute_graph_stub` with the real
-   `execute_graph` CPI call.
-4. Replace graph functions in `fhe::graphs` with `#[encrypt_fn]`-decorated
-   versions (SDK-ready signatures shown in each function's doc comment).
+Wired against the vendored `encrypt-pinocchio` crate (under
+`vendor/encrypt/`). `EncryptContext::{add_deposit, sub_deposit, add_debt,
+sub_debt, is_healthy}` build instruction data via `fhe::graph_builder` and
+forward to `encrypt_pinocchio::EncryptContext::execute_graph`. Plaintext
+`create_plaintext_u64` uses `create_plaintext_typed::<Uint64>`.
 
 # Architecture
 
@@ -58,6 +44,7 @@ confidentiality — an observer cannot read the values from the ciphertext.
 */
 
 pub mod context;
+pub mod graph_builder;
 pub mod graphs;
 pub mod types;
 

@@ -107,31 +107,23 @@ impl Withdraw {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?; // pool
-        check_program_owner(&accounts[4], program_id)?; // user_position
+        check_program_owner(&accounts[3], program_id)?;
+        check_program_owner(&accounts[4], program_id)?;
         check_token_program(&accounts[6])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
+        let (token_amount, authority_bump, supply_index) = {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
             pool.accrue_interest(clock.unix_timestamp)?;
-        }
 
-        // ── Compute withdrawal amount and health factor ───────────────────
-        let (token_amount, authority_bump) = {
-            let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
             pos.verify_binding(accounts[0].address(), accounts[3].address())?;
             if pos.cross_collateral != 0 {
                 return Err(LendError::CrossCollateralActive.into());
             }
-            compute_withdrawal_terms(pool, pos, self.shares)?
+            let (amt, bump) = compute_withdrawal_terms(pool, pos, self.shares)?;
+            (amt, bump, pool.supply_index)
         };
 
         // ── Token transfer: vault → user ──────────────────────────────────
@@ -147,8 +139,6 @@ impl Withdraw {
         Transfer::new(&accounts[2], &accounts[1], &accounts[5], token_amount)
             .invoke_signed(&[signer])?;
 
-        // ── Update state ──────────────────────────────────────────────────
-        let supply_index = LendingPool::from_account(&accounts[3])?.supply_index;
         {
             let pos = UserPosition::from_account_mut(&accounts[4])?;
             apply_withdrawal_to_position(pos, self.shares, supply_index);

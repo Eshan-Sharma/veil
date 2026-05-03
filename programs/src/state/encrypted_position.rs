@@ -31,6 +31,10 @@ use pinocchio::{account::AccountView, error::ProgramError, Address};
 
 use crate::errors::LendError;
 
+/// PDA seed for `EncryptedPosition`. Derivation:
+/// `find_program_address(&[ENC_POS_SEED, owner, pool], &VEIL_PROGRAM_ID)`.
+pub const ENC_POS_SEED: &[u8] = b"enc_pos";
+
 #[repr(C)]
 pub struct EncryptedPosition {
     pub discriminator: [u8; 8],

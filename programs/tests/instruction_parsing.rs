@@ -44,13 +44,12 @@ fn update_pool_data(
 }
 
 fn ika_sign_data() -> Vec<u8> {
-    let mut data = vec![0u8; 100];
+    let mut data = vec![0u8; 67];
     data[0..32].copy_from_slice(&[1u8; 32]);
-    data[32..64].copy_from_slice(&[2u8; 32]);
-    data[64..96].copy_from_slice(&[3u8; 32]);
-    data[96..98].copy_from_slice(&1u16.to_le_bytes());
-    data[98] = 250;
-    data[99] = 251;
+    data[32..64].copy_from_slice(&[3u8; 32]);
+    data[64] = 1;
+    data[65] = 250;
+    data[66] = 251;
     data
 }
 
@@ -404,8 +403,7 @@ fn ika_release_discriminator_is_eighteen() {
 #[test]
 fn ika_sign_from_data_parses_fields() {
     let ix = IkaSign::from_data(&ika_sign_data()).unwrap();
-    assert_eq!(ix.message_digest, [1u8; 32]);
-    assert_eq!(ix.message_metadata_digest, [2u8; 32]);
+    assert_eq!(ix.message_hash, [1u8; 32]);
     assert_eq!(ix.user_pubkey, [3u8; 32]);
     assert_eq!(ix.signature_scheme, 1);
     assert_eq!(ix.msg_approval_bump, 250);
@@ -415,7 +413,7 @@ fn ika_sign_from_data_parses_fields() {
 #[test]
 fn ika_sign_from_data_rejects_short_input() {
     assert!(IkaSign::from_data(&[]).is_err());
-    assert!(IkaSign::from_data(&[0u8; 99]).is_err());
+    assert!(IkaSign::from_data(&[0u8; 66]).is_err());
 }
 
 #[test]

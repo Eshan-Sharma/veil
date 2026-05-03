@@ -30,10 +30,8 @@ use crate::{
 };
 
 /// Maximum acceptable age (in seconds) of a Pyth oracle price update.
-/// Tightened from 120s to 30s — Solana markets move several percent in
-/// minutes during volatile events, and a wider window lets an attacker
-/// cache a favourable price and immediately borrow against it.
-const MAX_ORACLE_AGE: i64 = 30;
+/// 180 s — covers Pyth devnet hiccups; mainnet would tighten this back.
+pub const MAX_ORACLE_AGE: i64 = 180;
 
 /// Acceptable range for Pyth's exponent. An out-of-range exponent would
 /// cause `10u128.checked_pow(|expo|)` to overflow in `token_to_usd_wad`,
@@ -113,8 +111,9 @@ impl UpdateOraclePrice {
         // On Solana, Clock is always available. In off-chain test harnesses
         // it may be absent; we skip the check only when the sysvar is
         // genuinely unavailable (UnsupportedSysvar).
-        if let Ok(clock) = Clock::get() {
-            let age = clock.unix_timestamp.saturating_sub(pyth_price.timestamp);
+        let now_ts: Option<i64> = Clock::get().ok().map(|c| c.unix_timestamp);
+        if let Some(now) = now_ts {
+            let age = now.saturating_sub(pyth_price.timestamp);
             if age > MAX_ORACLE_AGE {
                 return Err(LendError::OraclePriceStale.into());
             }
@@ -144,6 +143,12 @@ impl UpdateOraclePrice {
         pool.oracle_price = pyth_price.price;
         pool.oracle_conf  = pyth_price.conf;
         pool.oracle_expo  = pyth_price.expo;
+        // Record the on-chain time the cache was refreshed. Liquidation paths
+        // consult this so a price snapshot can't be replayed beyond MAX_ORACLE_AGE
+        // even if no one bothered to push a new one in time.
+        if let Some(now) = now_ts {
+            pool.oracle_updated_at = now;
+        }
 
         Ok(())
     }

@@ -124,47 +124,47 @@ export function ikaReleaseIx(
 
 // ─── IkaSign (discriminator 0x13) ────────────────────────────────────────────
 //
-// Accounts:
-//   [0] user             signer, writable
-//   [1] coordinator      readonly
-//   [2] message_approval writable
-//   [3] dwallet          readonly
-//   [4] ika_position     readonly
-//   [5] caller_program   readonly  (Veil program)
-//   [6] cpi_authority    readonly
-//   [7] system_program
-//   [8] ika_program      readonly
+// Mirrors Ika's redesigned `approve_message` (Apr 13 2026 SDK update):
+// coordinator was dropped, sig_scheme shrank u16→u8, metadata_digest was
+// removed from the instruction payload (the MessageApproval account still
+// stores it for binding, the PDA derivation still includes the optional
+// metadata digest seed — see findMessageApproval).
 //
-// Data (after disc): message_digest[32], message_metadata_digest[32],
-//                    user_pubkey[32], signature_scheme u16 LE,
+// Accounts (8):
+//   [0] user             signer, writable
+//   [1] message_approval writable
+//   [2] dwallet          readonly
+//   [3] ika_position     readonly
+//   [4] caller_program   readonly  (Veil program)
+//   [5] cpi_authority    readonly
+//   [6] system_program
+//   [7] ika_program      readonly
+//
+// Data (after disc): message_hash[32], user_pubkey[32], signature_scheme u8,
 //                    msg_approval_bump u8, cpi_authority_bump u8
-//                    Total = 1 + 100 = 101 bytes
+//                    Total = 1 + 67 = 68 bytes
 
 export function ikaSignIx(
   user: PublicKey,
-  coordinator: PublicKey,
   messageApproval: PublicKey,
   dwallet: PublicKey,
   ikaPosition: PublicKey,
   callerProgram: PublicKey,
   cpiAuthority: PublicKey,
-  messageDigest: Uint8Array,
-  messageMetadataDigest: Uint8Array,
+  messageHash: Uint8Array,
   userPubkey: Uint8Array,
   signatureScheme: number,
   msgApprovalBump: number,
   cpiAuthorityBump: number
 ): TransactionInstruction {
-  if (messageDigest.length !== 32)          throw new Error("messageDigest must be 32 bytes");
-  if (messageMetadataDigest.length !== 32)  throw new Error("messageMetadataDigest must be 32 bytes");
-  if (userPubkey.length !== 32)             throw new Error("userPubkey must be 32 bytes");
+  if (messageHash.length !== 32) throw new Error("messageHash must be 32 bytes");
+  if (userPubkey.length !== 32)  throw new Error("userPubkey must be 32 bytes");
 
   const data = concat(
     u8(0x13),
-    messageDigest,
-    messageMetadataDigest,
+    messageHash,
     userPubkey,
-    u16LE(signatureScheme),
+    u8(signatureScheme),
     u8(msgApprovalBump),
     u8(cpiAuthorityBump)
   );
@@ -172,7 +172,6 @@ export function ikaSignIx(
     programId: PROGRAM_ID,
     keys: [
       { pubkey: user,            isSigner: true,  isWritable: true  },
-      { pubkey: coordinator,     isSigner: false, isWritable: false },
       { pubkey: messageApproval, isSigner: false, isWritable: true  },
       { pubkey: dwallet,         isSigner: false, isWritable: false },
       { pubkey: ikaPosition,     isSigner: false, isWritable: false },
@@ -180,6 +179,34 @@ export function ikaSignIx(
       { pubkey: cpiAuthority,    isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: IKA_PROGRAM_PK,  isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+// ─── Ika `transfer_ownership` direct-signer path (disc 24) ─────────────────
+//
+// Submitted by the dWallet's current authority (the user) directly to the
+// Ika program — no Veil CPI involved. Used by the modal flow to hand the
+// dWallet over to Veil's CPI authority PDA before `ikaRegisterIx` runs.
+//
+// Accounts (2):
+//   [0] current_authority signer
+//   [1] dwallet           writable
+//
+// Data: discriminator(1) + new_authority(32) = 33 bytes.
+
+export function ikaTransferOwnershipIx(
+  currentAuthority: PublicKey,
+  dwallet: PublicKey,
+  newAuthority: PublicKey,
+): TransactionInstruction {
+  const data = concat(u8(24), newAuthority.toBytes());
+  return new TransactionInstruction({
+    programId: IKA_PROGRAM_PK,
+    keys: [
+      { pubkey: currentAuthority, isSigner: true,  isWritable: false },
+      { pubkey: dwallet,          isSigner: false, isWritable: true  },
     ],
     data,
   });

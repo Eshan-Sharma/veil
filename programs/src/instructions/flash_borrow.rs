@@ -62,34 +62,22 @@ impl FlashBorrow {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
         check_program_owner(&accounts[3], program_id)?;
         check_token_program(&accounts[5])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
+        let authority_bump = {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
             if pool.paused != 0 {
                 return Err(LendError::PoolPaused.into());
             }
             pool.accrue_interest(clock.unix_timestamp)?;
-        }
 
-        // ── Validate and record ───────────────────────────────────────────
-        let authority_bump = {
-            let pool = LendingPool::from_account(&accounts[3])?;
-
-            // Only one flash loan per pool per transaction.
             if pool.flash_loan_amount != 0 {
                 return Err(LendError::FlashLoanActive.into());
             }
 
-            // Pool must have enough free liquidity.
             let available = pool
                 .total_deposits
                 .saturating_sub(pool.total_borrows)
@@ -98,14 +86,9 @@ impl FlashBorrow {
                 return Err(LendError::InsufficientLiquidity.into());
             }
 
+            pool.flash_loan_amount = self.amount;
             pool.authority_bump
         };
-
-        // ── Record the in-flight loan ─────────────────────────────────────
-        {
-            let pool = LendingPool::from_account_mut(&accounts[3])?;
-            pool.flash_loan_amount = self.amount;
-        }
 
         // ── Transfer tokens: vault → borrower ────────────────────────────
         let pool_addr = *accounts[3].address();

@@ -9,6 +9,47 @@ import {
 
 const IKA_PROGRAM_PK = new PublicKey(IKA_PROGRAM_ID);
 
+// ─── dWallet PDA ─────────────────────────────────────────────────────────────
+
+/**
+ * Pack the dWallet seed payload as `[curve_byte] ++ public_key`.
+ *
+ * Mirrors the `pack_dwallet_seed_payload` helper in
+ * `chains/solana/examples/voting/native/tests/litesvm.rs` of the Ika
+ * pre-alpha repo. The on-chain program splits this buffer into 32-byte
+ * chunks and uses each chunk as a seed.
+ */
+export function packDwalletSeedPayload(
+  curve: DWalletCurveValue,
+  publicKey: Uint8Array,
+): Uint8Array {
+  const out = new Uint8Array(1 + publicKey.length);
+  out[0] = curve;
+  out.set(publicKey, 1);
+  return out;
+}
+
+/**
+ * Derive the dWallet PDA on the Ika program from the DKG-produced public key.
+ *
+ * Seeds: `[b"dwallet", payload[0..32], payload[32..64], ...]` where
+ * `payload = packDwalletSeedPayload(curve, public_key)`.
+ *
+ * Solana caps each seed at 32 bytes; the payload is chunked rather than
+ * passed whole.
+ */
+export function findDwallet(
+  curve: DWalletCurveValue,
+  publicKey: Uint8Array,
+): [PublicKey, number] {
+  const payload = packDwalletSeedPayload(curve, publicKey);
+  const seeds: Buffer[] = [Buffer.from("dwallet")];
+  for (let i = 0; i < payload.length; i += 32) {
+    seeds.push(Buffer.from(payload.slice(i, Math.min(i + 32, payload.length))));
+  }
+  return PublicKey.findProgramAddressSync(seeds, IKA_PROGRAM_PK);
+}
+
 // ─── Veil CPI authority ───────────────────────────────────────────────────────
 
 /**

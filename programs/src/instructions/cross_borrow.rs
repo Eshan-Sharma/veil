@@ -193,6 +193,21 @@ impl CrossBorrow {
 
         let user_addr = *accounts[0].address();
         let num_pairs = collateral_accounts.len() / 2;
+
+        // Up-front oracle-anchor sweep: if any supplied collateral pool has
+        // no Pyth feed anchored, fail BEFORE we transfer tokens or mutate
+        // state. Otherwise the error fires mid-loop after partial work.
+        // The borrow pool's anchor is checked inside `pool_token_to_usd`
+        // when we value the new borrow against existing debt — trust that.
+        for i in 0..num_pairs {
+            let coll_pool_idx = 7 + i * 2;
+            check_program_owner(&accounts[coll_pool_idx], program_id)?;
+            let coll_pool = LendingPool::from_account(&accounts[coll_pool_idx])?;
+            if coll_pool.pyth_price_feed == [0u8; 32].into() {
+                return Err(LendError::OracleNotAnchored.into());
+            }
+        }
+
         for i in 0..num_pairs {
             let coll_pool_idx = 7 + i * 2;
             let coll_pos_idx = 7 + i * 2 + 1;
@@ -280,15 +295,25 @@ impl CrossBorrow {
             .try_into()
             .map_err(|_| ProgramError::InvalidArgument)?;
 
-        // Generate a set id from the slot/timestamp. Two distinct cross-borrow
-        // calls in the same slot from the same user are rejected at the
-        // collision-time uniqueness check below — the id only needs to differ
-        // from existing set ids on involved positions.
-        let set_id: u64 = (clock.slot as u64)
-            .wrapping_mul(1_000_003)
-            .wrapping_add(clock.unix_timestamp as u64)
-            .wrapping_add(self.amount);
-        let set_id = if set_id == 0 { 1 } else { set_id };
+        // Generate a set id from the slot/timestamp mixed with the borrower
+        // pubkey and the borrow position address. Two distinct cross-borrow
+        // calls from different users in the same slot+amount must produce
+        // different ids, otherwise an attacker could collide with a victim's
+        // set_id and attach unrelated positions to the same nominal cross-set.
+        // SHA-256 syscalls aren't available in this Pinocchio build — we fold
+        // the first 8 bytes of each pubkey into the slot/ts/amount mixture via
+        // wrapping_mul / wrapping_add.
+        let borrower_bytes = accounts[0].address().as_array();
+        let pos_bytes = accounts[2].address().as_array();
+        let mut acc = (clock.slot as u64).wrapping_mul(1_000_003);
+        acc = acc.wrapping_add(clock.unix_timestamp as u64);
+        acc = acc.wrapping_add(self.amount);
+        acc = acc.wrapping_add(u64::from_le_bytes(
+            borrower_bytes[0..8].try_into().unwrap(),
+        ));
+        acc = acc.wrapping_mul(1_000_003);
+        acc = acc.wrapping_add(u64::from_le_bytes(pos_bytes[0..8].try_into().unwrap()));
+        let set_id: u64 = if acc == 0 { 1 } else { acc };
 
         // Reject if any involved position is already in a different cross-set.
         // Re-using positions already cross-linked elsewhere would let a user

@@ -120,31 +120,23 @@ impl Borrow {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?; // pool
-        check_program_owner(&accounts[4], program_id)?; // user_position
+        check_program_owner(&accounts[3], program_id)?;
+        check_program_owner(&accounts[4], program_id)?;
         check_token_program(&accounts[6])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
+        let (existing_debt, authority_bump, borrow_index) = {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
             if pool.paused != 0 {
                 return Err(LendError::PoolPaused.into());
             }
             pool.accrue_interest(clock.unix_timestamp)?;
-        }
 
-        // ── Risk checks ───────────────────────────────────────────────────
-        let (existing_debt, authority_bump) = {
-            let pool = LendingPool::from_account(&accounts[3])?;
             let pos = UserPosition::from_account(&accounts[4])?;
             pos.verify_binding(accounts[0].address(), accounts[3].address())?;
-            validate_borrow(pool, pos, self.amount)?
+            let (debt, bump) = validate_borrow(pool, pos, self.amount)?;
+            (debt, bump, pool.borrow_index)
         };
 
         // ── Token transfer: vault → user ──────────────────────────────────
@@ -160,11 +152,6 @@ impl Borrow {
         Transfer::new(&accounts[2], &accounts[1], &accounts[5], self.amount)
             .invoke_signed(&[signer])?;
 
-        // ── Update state ──────────────────────────────────────────────────
-        let borrow_index = {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            pool.borrow_index
-        };
         {
             let pos = UserPosition::from_account_mut(&accounts[4])?;
             apply_borrow_to_position(pos, existing_debt, self.amount, borrow_index);

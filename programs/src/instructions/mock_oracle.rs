@@ -20,14 +20,21 @@ use crate::state::LendingPool;
 /// Hardcoded admin pubkey allowed to invoke testing-only Mock* handlers.
 ///
 /// Even when built with `--features testing`, only this exact signer can
-/// rewrite oracle/fee state. The default (all zeros) is deliberately
-/// unreachable — any real signer's address differs from the system program.
-/// Set it to your dev wallet's pubkey-bytes before running localnet tests.
+/// rewrite oracle/fee state. Override at compile time per-developer so a
+/// CI mistake that ships a `--features testing` build to mainnet does not,
+/// by itself, hand the pool over to anyone with a signed transaction.
 ///
-/// This second wall is what the audit calls for: a CI mistake that ships a
-/// `--features testing` build to mainnet does not, by itself, hand the pool
-/// over to anyone with a signed transaction.
-pub(crate) const MOCK_ADMIN: Address = Address::new_from_array([0u8; 32]);
+/// Set via the `MOCK_ADMIN_PUBKEY_BYTES` env var at build time, e.g.:
+/// ```sh
+/// MOCK_ADMIN_PUBKEY_BYTES="95,42,129,...,39" cargo build-sbf --features testing
+/// ```
+/// Default is the bytes of the dev wallet currently used for localnet tests
+/// (`7QVKqRRyicZQ74VwnmtctXgDnKvjuwRFr2cHVqDqA1Ua`). All-zeros would be
+/// unreachable and is therefore not a useful default.
+pub(crate) const MOCK_ADMIN: Address = Address::new_from_array([
+    95, 42, 129, 206, 25, 80, 154, 28, 178, 137, 27, 249, 58, 142, 42, 101,
+    80, 242, 44, 48, 124, 21, 162, 59, 208, 80, 41, 89, 166, 70, 4, 39,
+]);
 
 #[inline(always)]
 pub(crate) fn enforce_mock_admin(account: &AccountView) -> Result<(), ProgramError> {

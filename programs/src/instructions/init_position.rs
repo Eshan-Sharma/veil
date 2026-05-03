@@ -60,10 +60,11 @@ impl InitPosition {
             let _pool = LendingPool::from_account(&accounts[1])?;
         }
 
-        // Position must not already exist
-        if accounts[2].lamports() != 0 {
-            // Already created — no-op (idempotent)
-            return Ok(());
+        // Refuse to re-initialize an existing position. A typo in the address
+        // would otherwise silently no-op, leaving the user pointing at someone
+        // else's PDA.
+        if UserPosition::from_account(&accounts[2]).is_ok() {
+            return Err(ProgramError::InvalidAccountData);
         }
 
         let pool_addr = *accounts[1].address();

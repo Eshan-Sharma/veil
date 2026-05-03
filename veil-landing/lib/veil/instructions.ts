@@ -502,6 +502,33 @@ export function setPoolDecimalsIx(
   });
 }
 
+// ─── SetIkaCollateralCap (discriminator 0x1B) ───────────────────────────────
+//
+// Per-pool cap on the USD value (in cents) an IkaDwalletPosition can claim
+// against this pool. Defaults to 0 — Ika registration is rejected until
+// authority opts in. Closes the "register at u64::MAX, drain vault" attack
+// (gate #3 in docs/IKA_COLLATERAL_WIRING.md).
+//
+// Accounts:
+//   [0]  authority   signer
+//   [1]  pool        writable
+//
+// Data (after disc): max_ika_usd_cents u64 LE → 8 bytes
+export function setIkaCollateralCapIx(
+  authority: PublicKey,
+  pool: PublicKey,
+  maxIkaUsdCents: bigint,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: authority, isSigner: true,  isWritable: false },
+      { pubkey: pool,      isSigner: false, isWritable: true  },
+    ],
+    data: concat(u8(0x1B), u64LE(maxIkaUsdCents)),
+  });
+}
+
 // ─── InitPosition (discriminator 0x1A) ──────────────────────────────────────
 //
 // Creates an empty UserPosition PDA without depositing.
@@ -653,6 +680,307 @@ export function crossRepayIx(
   ];
 
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
+}
+
+// ─── Encrypted-position instructions (0x08–0x0C) ─────────────────────────────
+//
+// The Encrypt program (devnet ID 4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8)
+// is not deployed on localnet. Veil's CPI to it is a no-op stub there, so
+// every Private* instruction succeeds but produces no real ciphertext —
+// only the plaintext UserPosition mirror is updated.
+//
+// On-chain `enable_privacy.rs` and friends still require all the Encrypt
+// account slots to be present in the tx account list. Callers are expected
+// to pass an ENCRYPT_PROGRAM_ID-style placeholder (any pubkey) — the on-
+// chain code only reads `account.address()` on the CPI accounts.
+//
+// The ciphertext accounts (`enc_deposit_ct`, `enc_debt_ct`, `amount_ct`,
+// `healthy_out_ct`) must EXIST on-chain at tx-submission time. The simplest
+// path on localnet is to create them as empty SystemProgram-owned accounts
+// in the same tx; see `scripts/e2e-cross-encrypt.ts` for that helper.
+
+/** Encrypt program ID (mainnet/devnet). Encrypt CPI dereferences these
+ * accounts — they must be the real Encrypt-program-owned config /
+ * network-key / event-authority. SystemProgram placeholders won't work
+ * against a real Encrypt deployment. */
+export const ENCRYPT_PROGRAM_ID = new PublicKey(
+  "4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8",
+);
+
+/** All 8 Encrypt-side accounts that EnablePrivacy / Private* instructions
+ *  must include. Exact addresses don't matter on localnet (stubbed CPI). */
+export type EncryptAccounts = {
+  encryptProgram: PublicKey;
+  encryptConfig: PublicKey;
+  encryptDeposit: PublicKey;     // writable
+  cpiAuthority: PublicKey;
+  callerProgram: PublicKey;      // Veil's own program account
+  networkEncKey: PublicKey;
+  eventAuthority: PublicKey;
+  systemProgram: PublicKey;
+};
+
+// ─── EnablePrivacy (discriminator 0x08) ──────────────────────────────────────
+//
+// Accounts (14):
+//   [0] user               signer, writable
+//   [1] userPosition       read-only
+//   [2] encryptedPosition  writable (new PDA: enc_pos / user / pool)
+//   [3] encDepositCt       writable (must exist on-chain)
+//   [4] encDebtCt          writable (must exist on-chain)
+//   [5] pool               read-only (writable upstream so accrue runs)
+//   [6] encrypt_program    read-only
+//   [7] encrypt_config     read-only
+//   [8] encrypt_deposit    writable
+//   [9] cpi_authority      read-only
+//   [10] caller_program    read-only
+//   [11] network_enc_key   read-only
+//   [12] event_authority   read-only
+//   [13] system_program    read-only
+//
+// Data (after disc): enc_pos_bump u8, cpi_auth_bump u8 → 2 bytes
+
+export function enablePrivacyIx(
+  user: PublicKey,
+  userPosition: PublicKey,
+  encryptedPosition: PublicKey,
+  encDepositCt: PublicKey,
+  encDebtCt: PublicKey,
+  pool: PublicKey,
+  enc: EncryptAccounts,
+  encPosBump: number,
+  cpiAuthorityBump: number,
+): TransactionInstruction {
+  // The on-chain code does `LendingPool::from_account_mut` to accrue, so
+  // pool must be writable in the tx account list even though the doc says
+  // "read-only" — match the actual instruction implementation.
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user,              isSigner: true,  isWritable: true  },
+      { pubkey: userPosition,      isSigner: false, isWritable: false },
+      { pubkey: encryptedPosition, isSigner: false, isWritable: true  },
+      { pubkey: encDepositCt,      isSigner: false, isWritable: true  },
+      { pubkey: encDebtCt,         isSigner: false, isWritable: true  },
+      { pubkey: pool,              isSigner: false, isWritable: true  },
+      { pubkey: enc.encryptProgram,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptConfig,   isSigner: false, isWritable: false },
+      { pubkey: enc.encryptDeposit,  isSigner: false, isWritable: true  },
+      { pubkey: enc.cpiAuthority,    isSigner: false, isWritable: false },
+      { pubkey: enc.callerProgram,   isSigner: false, isWritable: false },
+      { pubkey: enc.networkEncKey,   isSigner: false, isWritable: false },
+      { pubkey: enc.eventAuthority,  isSigner: false, isWritable: false },
+      { pubkey: enc.systemProgram,   isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([0x08, encPosBump, cpiAuthorityBump]),
+  });
+}
+
+// ─── PrivateDeposit (discriminator 0x09) ─────────────────────────────────────
+//
+// Accounts (17):
+//   [0]  user, [1]  userToken, [2]  vault, [3]  pool, [4]  userPosition,
+//   [5]  encryptedPosition, [6]  encDepositCt, [7]  amountCt,
+//   [8]  systemProgram, [9]  tokenProgram,
+//   [10..16] Encrypt accounts (program/config/deposit/cpi/caller/nek/eventauth)
+//
+// Data (after disc): amount u64 LE, cpi_auth_bump u8 → 9 bytes
+
+export function privateDepositIx(
+  user: PublicKey,
+  userToken: PublicKey,
+  vault: PublicKey,
+  pool: PublicKey,
+  userPosition: PublicKey,
+  encryptedPosition: PublicKey,
+  encDepositCt: PublicKey,
+  amountCt: PublicKey,
+  enc: EncryptAccounts,
+  amount: bigint,
+  cpiAuthorityBump: number,
+): TransactionInstruction {
+  const data = concat(u8(0x09), u64LE(amount), u8(cpiAuthorityBump));
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user,              isSigner: true,  isWritable: true  },
+      { pubkey: userToken,         isSigner: false, isWritable: true  },
+      { pubkey: vault,             isSigner: false, isWritable: true  },
+      { pubkey: pool,              isSigner: false, isWritable: true  },
+      { pubkey: userPosition,      isSigner: false, isWritable: true  },
+      { pubkey: encryptedPosition, isSigner: false, isWritable: true  },
+      { pubkey: encDepositCt,      isSigner: false, isWritable: true  },
+      { pubkey: amountCt,          isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptProgram, isSigner: false, isWritable: false },
+      { pubkey: enc.encryptConfig,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptDeposit, isSigner: false, isWritable: true  },
+      { pubkey: enc.cpiAuthority,   isSigner: false, isWritable: false },
+      { pubkey: enc.callerProgram,  isSigner: false, isWritable: false },
+      { pubkey: enc.networkEncKey,  isSigner: false, isWritable: false },
+      { pubkey: enc.eventAuthority, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+// ─── PrivateBorrow (discriminator 0x0A) ──────────────────────────────────────
+//
+// Accounts (20):
+//   [0]  user, [1]  userToken, [2]  vault, [3]  pool, [4]  userPosition,
+//   [5]  encryptedPosition, [6]  encDebtCt, [7]  encDepositCt,
+//   [8]  amountCt, [9]  healthyOutCt, [10] poolAuthority, [11] tokenProgram,
+//   [12..19] Encrypt accounts (program/config/deposit/cpi/caller/nek/eventauth/system)
+//
+// Data: amount u64 LE, cpi_auth_bump u8 → 9 bytes
+
+export function privateBorrowIx(
+  user: PublicKey,
+  userToken: PublicKey,
+  vault: PublicKey,
+  pool: PublicKey,
+  userPosition: PublicKey,
+  encryptedPosition: PublicKey,
+  encDebtCt: PublicKey,
+  encDepositCt: PublicKey,
+  amountCt: PublicKey,
+  healthyOutCt: PublicKey,
+  poolAuthority: PublicKey,
+  enc: EncryptAccounts,
+  amount: bigint,
+  cpiAuthorityBump: number,
+): TransactionInstruction {
+  const data = concat(u8(0x0A), u64LE(amount), u8(cpiAuthorityBump));
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user,              isSigner: true,  isWritable: true  },
+      { pubkey: userToken,         isSigner: false, isWritable: true  },
+      { pubkey: vault,             isSigner: false, isWritable: true  },
+      { pubkey: pool,              isSigner: false, isWritable: true  },
+      { pubkey: userPosition,      isSigner: false, isWritable: true  },
+      { pubkey: encryptedPosition, isSigner: false, isWritable: true  },
+      { pubkey: encDebtCt,         isSigner: false, isWritable: true  },
+      { pubkey: encDepositCt,      isSigner: false, isWritable: false },
+      { pubkey: amountCt,          isSigner: false, isWritable: true  },
+      { pubkey: healthyOutCt,      isSigner: false, isWritable: true  },
+      { pubkey: poolAuthority,     isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptProgram, isSigner: false, isWritable: false },
+      { pubkey: enc.encryptConfig,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptDeposit, isSigner: false, isWritable: true  },
+      { pubkey: enc.cpiAuthority,   isSigner: false, isWritable: false },
+      { pubkey: enc.callerProgram,  isSigner: false, isWritable: false },
+      { pubkey: enc.networkEncKey,  isSigner: false, isWritable: false },
+      { pubkey: enc.eventAuthority, isSigner: false, isWritable: false },
+      { pubkey: enc.systemProgram,  isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+// ─── PrivateRepay (discriminator 0x0B) ───────────────────────────────────────
+//
+// Accounts (17):
+//   [0]  user, [1]  userToken, [2]  vault, [3]  pool, [4]  userPosition,
+//   [5]  encryptedPosition, [6]  encDebtCt, [7]  amountCt, [8]  tokenProgram,
+//   [9..16] Encrypt accounts
+//
+// Data: amount u64 LE, cpi_auth_bump u8 → 9 bytes
+
+export function privateRepayIx(
+  user: PublicKey,
+  userToken: PublicKey,
+  vault: PublicKey,
+  pool: PublicKey,
+  userPosition: PublicKey,
+  encryptedPosition: PublicKey,
+  encDebtCt: PublicKey,
+  amountCt: PublicKey,
+  enc: EncryptAccounts,
+  amount: bigint,
+  cpiAuthorityBump: number,
+): TransactionInstruction {
+  const data = concat(u8(0x0B), u64LE(amount), u8(cpiAuthorityBump));
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user,              isSigner: true,  isWritable: true  },
+      { pubkey: userToken,         isSigner: false, isWritable: true  },
+      { pubkey: vault,             isSigner: false, isWritable: true  },
+      { pubkey: pool,              isSigner: false, isWritable: true  },
+      { pubkey: userPosition,      isSigner: false, isWritable: true  },
+      { pubkey: encryptedPosition, isSigner: false, isWritable: true  },
+      { pubkey: encDebtCt,         isSigner: false, isWritable: true  },
+      { pubkey: amountCt,          isSigner: false, isWritable: true  },
+      { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptProgram, isSigner: false, isWritable: false },
+      { pubkey: enc.encryptConfig,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptDeposit, isSigner: false, isWritable: true  },
+      { pubkey: enc.cpiAuthority,   isSigner: false, isWritable: false },
+      { pubkey: enc.callerProgram,  isSigner: false, isWritable: false },
+      { pubkey: enc.networkEncKey,  isSigner: false, isWritable: false },
+      { pubkey: enc.eventAuthority, isSigner: false, isWritable: false },
+      { pubkey: enc.systemProgram,  isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+// ─── PrivateWithdraw (discriminator 0x0C) ────────────────────────────────────
+//
+// Accounts (20):
+//   [0]  user, [1]  userToken, [2]  vault, [3]  pool, [4]  userPosition,
+//   [5]  encryptedPosition, [6]  encDepositCt, [7]  encDebtCt,
+//   [8]  amountCt, [9]  healthyOutCt, [10] poolAuthority, [11] tokenProgram,
+//   [12..19] Encrypt accounts
+//
+// Data: shares u64 LE, cpi_auth_bump u8 → 9 bytes
+
+export function privateWithdrawIx(
+  user: PublicKey,
+  userToken: PublicKey,
+  vault: PublicKey,
+  pool: PublicKey,
+  userPosition: PublicKey,
+  encryptedPosition: PublicKey,
+  encDepositCt: PublicKey,
+  encDebtCt: PublicKey,
+  amountCt: PublicKey,
+  healthyOutCt: PublicKey,
+  poolAuthority: PublicKey,
+  enc: EncryptAccounts,
+  shares: bigint,
+  cpiAuthorityBump: number,
+): TransactionInstruction {
+  const data = concat(u8(0x0C), u64LE(shares), u8(cpiAuthorityBump));
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user,              isSigner: true,  isWritable: true  },
+      { pubkey: userToken,         isSigner: false, isWritable: true  },
+      { pubkey: vault,             isSigner: false, isWritable: true  },
+      { pubkey: pool,              isSigner: false, isWritable: true  },
+      { pubkey: userPosition,      isSigner: false, isWritable: true  },
+      { pubkey: encryptedPosition, isSigner: false, isWritable: true  },
+      { pubkey: encDepositCt,      isSigner: false, isWritable: true  },
+      { pubkey: encDebtCt,         isSigner: false, isWritable: false },
+      { pubkey: amountCt,          isSigner: false, isWritable: true  },
+      { pubkey: healthyOutCt,      isSigner: false, isWritable: true  },
+      { pubkey: poolAuthority,     isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptProgram, isSigner: false, isWritable: false },
+      { pubkey: enc.encryptConfig,  isSigner: false, isWritable: false },
+      { pubkey: enc.encryptDeposit, isSigner: false, isWritable: true  },
+      { pubkey: enc.cpiAuthority,   isSigner: false, isWritable: false },
+      { pubkey: enc.callerProgram,  isSigner: false, isWritable: false },
+      { pubkey: enc.networkEncKey,  isSigner: false, isWritable: false },
+      { pubkey: enc.eventAuthority, isSigner: false, isWritable: false },
+      { pubkey: enc.systemProgram,  isSigner: false, isWritable: false },
+    ],
+    data,
+  });
 }
 
 // ─── CrossLiquidate (discriminator 0x19) ─────────────────────────────────────

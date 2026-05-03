@@ -67,6 +67,13 @@ impl IkaRelease {
         if expected_cpi != *accounts[5].address() {
             return Err(LendError::InvalidPda.into());
         }
+        // Defence-in-depth (audit 05, finding I-5): the CPI authority MUST be
+        // a Veil-owned PDA. If Veil is upgraded and the seed is reused with
+        // different ownership semantics, this guard catches the mismatch
+        // before the IKA CPI fires.
+        if accounts[5].owner() != program_id {
+            return Err(LendError::InvalidAccountOwner.into());
+        }
 
         // ── Validate ika_program account ──────────────────────────────────────
         if *accounts[6].address() != IKA_PROGRAM_ID {

@@ -117,25 +117,20 @@ impl Deposit {
             return Err(LendError::ZeroAmount.into());
         }
 
-        // ── Owner / identity checks ──────────────────────────────────────
-        check_program_owner(&accounts[3], program_id)?; // pool
+        check_program_owner(&accounts[3], program_id)?;
         check_token_program(&accounts[6])?;
-        {
-            let pool = LendingPool::from_account(&accounts[3])?;
-            check_vault(&accounts[2], pool)?;
-        }
 
-        // ── Accrue interest ───────────────────────────────────────────────
         let clock = Clock::get()?;
-        {
+        let (supply_index, borrow_index) = {
             let pool = LendingPool::from_account_mut(&accounts[3])?;
+            check_vault(&accounts[2], pool)?;
             if pool.paused != 0 {
                 return Err(LendError::PoolPaused.into());
             }
             pool.accrue_interest(clock.unix_timestamp)?;
-        }
+            (pool.supply_index, pool.borrow_index)
+        };
 
-        // ── Create UserPosition if absent ─────────────────────────────────
         let bump_bytes = [self.position_bump];
         let pool_addr = *accounts[3].address();
         let user_addr = *accounts[0].address();
@@ -169,27 +164,19 @@ impl Deposit {
             }
             .invoke_signed(&[signer])?;
 
-            // Capture current indices BEFORE initializing position.
-            let (si, bi) = {
-                let pool = LendingPool::from_account(&accounts[3])?;
-                (pool.supply_index, pool.borrow_index)
-            };
-
             UserPosition::init(
                 &accounts[4],
                 &user_addr,
                 &pool_addr,
                 self.position_bump,
-                si,
-                bi,
+                supply_index,
+                borrow_index,
             )?;
         } else {
             let pos = UserPosition::from_account(&accounts[4])?;
             validate_existing_position(pos, &user_addr, &pool_addr)?;
         }
 
-        // ── Compute shares ────────────────────────────────────────────────
-        let supply_index = LendingPool::from_account(&accounts[3])?.supply_index;
         let shares = compute_deposit_shares(self.amount, supply_index)?;
 
         // ── Token transfer: user → vault ──────────────────────────────────

@@ -46,3 +46,22 @@ export function findVaultAddress(
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
 }
+
+/** PDA: ["enc_pos", user, pool] — EncryptedPosition mirror of UserPosition. */
+export function findEncryptedPositionAddress(
+  user: PublicKey,
+  pool: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("enc_pos"), user.toBuffer(), pool.toBuffer()],
+    PROGRAM_ID,
+  );
+}
+
+/** PDA: ["__encrypt_cpi_authority"] derived against the Veil program. */
+export function findEncryptCpiAuthorityAddress(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("__encrypt_cpi_authority")],
+    PROGRAM_ID,
+  );
+}

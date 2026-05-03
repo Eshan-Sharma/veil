@@ -59,6 +59,15 @@ fn unanchored_pool() -> Vec<u8> {
     pool_bytes(&make_pool(AUTHORITY, 0))
 }
 
+/// Same as `unanchored_pool` but with the Ika collateral cap unblocked
+/// (set to u64::MAX). Tests that exercise `ika_register` paths beyond the
+/// cap gate use this so the gate doesn't short-circuit the path under test.
+fn ika_enabled_pool() -> Vec<u8> {
+    let mut p = make_pool(AUTHORITY, 0);
+    p.max_ika_usd_cents = u64::MAX;
+    pool_bytes(&p)
+}
+
 fn make_dwallet_bytes(authority: [u8; 32], state: u8, discriminator: u8) -> Vec<u8> {
     let mut data = vec![0u8; 64];
     data[0] = discriminator;
@@ -163,13 +172,13 @@ fn user_position_bytes(
 // ── 1a. State sizing ──────────────────────────────────────────────────────────
 
 #[test]
-fn core_lending_pool_size_is_416() {
+fn core_lending_pool_size_is_432() {
     assert_eq!(
         core::mem::size_of::<LendingPool>(),
-        416,
+        432,
         "LendingPool SIZE must be a multiple of 16 (u128 alignment)"
     );
-    assert_eq!(LendingPool::SIZE, 416);
+    assert_eq!(LendingPool::SIZE, 432);
 }
 
 #[test]
@@ -956,18 +965,37 @@ fn enc_private_borrow_rejects_paused_pool() {
 fn enc_enable_privacy_rejects_reinitializing_existing_encrypted_position() {
     let pool = make_pool(AUTHORITY, 0);
     let pos = user_position_bytes(USER, POOL_KEY, 100, 0, WAD, WAD, 1);
-    let existing_enc = enc_position_bytes(USER, POOL_KEY, 1);
+
+    // Compute the canonical PDA addresses the program will check. Without
+    // this the new PDA-derivation guards (E-3 / E-2) short-circuit with
+    // InvalidPda before we ever get to the "account already initialised"
+    // check this test targets. We just pick a fixed bump and derive the
+    // matching addresses — the on-chain check uses the same `derive_address`
+    // path, so any bump works for the equality check.
+    let enc_pos_bump: u8 = 255;
+    let cpi_auth_bump: u8 = 255;
+    let enc_pos_addr = pinocchio::Address::derive_address(
+        &[b"enc_pos" as &[u8], &USER, &POOL_KEY],
+        Some(enc_pos_bump),
+        &PROGRAM,
+    );
+    let cpi_authority_addr = pinocchio::Address::derive_address(
+        &[veil_lending::fhe::context::CPI_AUTHORITY_SEED],
+        Some(cpi_auth_bump),
+        &PROGRAM,
+    );
+    let existing_enc = enc_position_bytes(USER, POOL_KEY, enc_pos_bump);
 
     let mut user = RawAccount::new(USER, true, true, &[]);
     let mut user_pos = RawAccount::new([0x35u8; 32], false, false, &pos);
-    let mut enc_pos = RawAccount::new([0x36u8; 32], false, true, &existing_enc);
+    let mut enc_pos = RawAccount::new(*enc_pos_addr.as_array(), false, true, &existing_enc);
     let mut enc_dep = RawAccount::new([0x37u8; 32], false, true, &[]);
     let mut enc_debt = RawAccount::new([0x38u8; 32], false, true, &[]);
     let mut pool_acct = RawAccount::new(POOL_KEY, false, false, &pool_bytes(&pool));
     let mut encrypt_program = RawAccount::new([0x39u8; 32], false, false, &[]);
     let mut encrypt_config = RawAccount::new([0x40u8; 32], false, false, &[]);
     let mut encrypt_deposit = RawAccount::new([0x41u8; 32], false, true, &[]);
-    let mut cpi = RawAccount::new([0x42u8; 32], false, false, &[]);
+    let mut cpi = RawAccount::new(*cpi_authority_addr.as_array(), false, false, &[]);
     let mut caller = RawAccount::new(*PROGRAM.as_array(), false, false, &[]);
     let mut network_key = RawAccount::new([0x43u8; 32], false, false, &[]);
     let mut event_auth = RawAccount::new([0x44u8; 32], false, false, &[]);
@@ -979,7 +1007,9 @@ fn enc_enable_privacy_rejects_reinitializing_existing_encrypted_position() {
             pool_acct.view(), encrypt_program.view(), encrypt_config.view(), encrypt_deposit.view(),
             cpi.view(), caller.view(), network_key.view(), event_auth.view(), system.view(),
         ];
-        EnablePrivacy::from_data(&[1, 1]).unwrap().process(&PROGRAM, &mut accounts)
+        EnablePrivacy::from_data(&[enc_pos_bump, cpi_auth_bump])
+            .unwrap()
+            .process(&PROGRAM, &mut accounts)
     };
     assert_eq!(result, Err(pinocchio::error::ProgramError::InvalidAccountData));
 }
@@ -1188,7 +1218,8 @@ fn ika_register_wrong_cpi_authority_pda_rejected() {
     let dwallet = make_dwallet_bytes(*cpi_authority.as_array(), 1, 2);
 
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut pool = RawAccount::new(POOL_KEY, false, false, &unanchored_pool());
+    let pool_bytes = ika_enabled_pool();
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
     let mut dw = RawAccount::new_with_owner(DWALLET, *IKA_PROGRAM_ID.as_array(), false, false, &dwallet);
     let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
     let mut wrong_cpi = RawAccount::new([6u8; 32], false, false, &[]);
@@ -1212,10 +1243,11 @@ fn ika_register_wrong_ika_program_owner_rejected() {
     let dwallet = make_dwallet_bytes(*cpi_authority.as_array(), 1, 2);
 
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut pool = RawAccount::new(POOL_KEY, false, false, &unanchored_pool());
+    let pool_bytes = ika_enabled_pool();
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
     let mut dw = RawAccount::new_with_owner(DWALLET, [0u8; 32], false, false, &dwallet);
     let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
 
     let result = unsafe {
@@ -1236,10 +1268,11 @@ fn ika_register_inactive_or_frozen_dwallet_rejected() {
     let frozen_dwallet = make_dwallet_bytes(*cpi_authority.as_array(), 2, 2);
 
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut pool = RawAccount::new(POOL_KEY, false, false, &unanchored_pool());
+    let pool_bytes = ika_enabled_pool();
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
     let mut dw = RawAccount::new_with_owner(DWALLET, *IKA_PROGRAM_ID.as_array(), false, false, &frozen_dwallet);
     let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
 
     let result = unsafe {
@@ -1259,10 +1292,11 @@ fn ika_register_malformed_dwallet_layout_rejected() {
     );
 
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut pool = RawAccount::new(POOL_KEY, false, false, &unanchored_pool());
+    let pool_bytes = ika_enabled_pool();
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
     let mut dw = RawAccount::new_with_owner(DWALLET, *IKA_PROGRAM_ID.as_array(), false, false, &[0u8; 8]);
     let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
 
     let result = unsafe {
@@ -1270,6 +1304,59 @@ fn ika_register_malformed_dwallet_layout_rejected() {
         IkaRegister::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
     };
     assert_eq!(result, Err(pinocchio::error::ProgramError::InvalidAccountData));
+}
+
+#[test]
+fn ika_register_disabled_when_cap_zero_rejected() {
+    let d = make_register_data(1_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
+    let cpi_authority = pinocchio::Address::derive_address(
+        &[CPI_AUTHORITY_SEED],
+        Some(1),
+        &PROGRAM,
+    );
+    let dwallet = make_dwallet_bytes(*cpi_authority.as_array(), 1, 2);
+
+    let mut user = RawAccount::new(USER, true, true, &[]);
+    // unanchored_pool has max_ika_usd_cents = 0 (default).
+    let pool_bytes = unanchored_pool();
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
+    let mut dw = RawAccount::new_with_owner(DWALLET, *IKA_PROGRAM_ID.as_array(), false, false, &dwallet);
+    let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
+    let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
+
+    let result = unsafe {
+        let mut accounts = [user.view(), pool.view(), dw.view(), ikapos.view(), cpi.view(), sys.view()];
+        IkaRegister::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::IkaCollateralDisabled.into()));
+}
+
+#[test]
+fn ika_register_value_above_cap_rejected() {
+    let d = make_register_data(2_000_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1, 1);
+    let cpi_authority = pinocchio::Address::derive_address(
+        &[CPI_AUTHORITY_SEED],
+        Some(1),
+        &PROGRAM,
+    );
+    let dwallet = make_dwallet_bytes(*cpi_authority.as_array(), 1, 2);
+
+    let mut user = RawAccount::new(USER, true, true, &[]);
+    let mut p = make_pool(AUTHORITY, 0);
+    p.max_ika_usd_cents = 1_000_000; // 1M cents = $10k cap
+    let pool_bytes = pool_bytes(&p);
+    let mut pool = RawAccount::new_with_owner(POOL_KEY, *PROGRAM.as_array(), false, false, &pool_bytes);
+    let mut dw = RawAccount::new_with_owner(DWALLET, *IKA_PROGRAM_ID.as_array(), false, false, &dwallet);
+    let mut ikapos = RawAccount::new([5u8; 32], false, true, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
+    let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
+
+    let result = unsafe {
+        let mut accounts = [user.view(), pool.view(), dw.view(), ikapos.view(), cpi.view(), sys.view()];
+        IkaRegister::from_data(&d).unwrap().process(&PROGRAM, &mut accounts)
+    };
+    assert_eq!(result, Err(LendError::IkaCollateralExceedsCap.into()));
 }
 
 #[test]
@@ -1298,7 +1385,7 @@ fn ika_released_position_cannot_release_again() {
     let mut dw = RawAccount::new(DWALLET, false, true, &[]);
     let mut pos = RawAccount::new([5u8; 32], false, true, &pos_bytes);
     let mut caller = RawAccount::new(*PROGRAM.as_array(), false, false, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut ika = RawAccount::new(*IKA_PROGRAM_ID.as_array(), false, false, &[]);
     // accounts[7] is the user_position; only inspected after the status/owner
     // checks fire, so a placeholder is sufficient for this test.
@@ -1325,7 +1412,7 @@ fn ika_non_owner_cannot_release_position() {
     let mut dw = RawAccount::new(DWALLET, false, true, &[]);
     let mut pos = RawAccount::new([5u8; 32], false, true, &pos_bytes);
     let mut caller = RawAccount::new(*PROGRAM.as_array(), false, false, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut ika = RawAccount::new(*IKA_PROGRAM_ID.as_array(), false, false, &[]);
     let mut user_pos = RawAccount::new([6u8; 32], false, false, &[]);
 
@@ -1345,19 +1432,18 @@ fn ika_active_position_with_wrong_dwallet_bound_fails_sign() {
         &PROGRAM,
     );
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut coordinator = RawAccount::new([7u8; 32], false, false, &[]);
     let mut msg = RawAccount::new([8u8; 32], false, true, &[]);
     let mut wrong_dwallet = RawAccount::new([9u8; 32], false, false, &[]);
     let mut pos = RawAccount::new([5u8; 32], false, false, &pos_bytes);
     let mut caller = RawAccount::new(*PROGRAM.as_array(), false, false, &[]);
-    let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+    let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
     let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
     let mut ika = RawAccount::new(*IKA_PROGRAM_ID.as_array(), false, false, &[]);
 
-    let data = [0u8; 100];
+    let data = [0u8; 67];
     let result = unsafe {
         let mut accounts = [
-            user.view(), coordinator.view(), msg.view(), wrong_dwallet.view(), pos.view(),
+            user.view(), msg.view(), wrong_dwallet.view(), pos.view(),
             caller.view(), cpi.view(), sys.view(), ika.view(),
         ];
         IkaSign::from_data(&data).unwrap().process(&PROGRAM, &mut accounts)
@@ -1377,19 +1463,18 @@ fn ika_released_or_liquidated_position_cannot_sign() {
         );
 
         let mut user = RawAccount::new(USER, true, true, &[]);
-        let mut coordinator = RawAccount::new([7u8; 32], false, false, &[]);
         let mut msg = RawAccount::new([8u8; 32], false, true, &[]);
         let mut dwallet = RawAccount::new(DWALLET, false, false, &[]);
         let mut pos = RawAccount::new([5u8; 32], false, false, &pos_bytes);
         let mut caller = RawAccount::new(*PROGRAM.as_array(), false, false, &[]);
-        let mut cpi = RawAccount::new(*cpi_authority.as_array(), false, false, &[]);
+        let mut cpi = RawAccount::new_with_owner(*cpi_authority.as_array(), *PROGRAM.as_array(), false, false, &[]);
         let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
         let mut ika = RawAccount::new(*IKA_PROGRAM_ID.as_array(), false, false, &[]);
 
-        let data = [0u8; 100];
+        let data = [0u8; 67];
         let result = unsafe {
             let mut accounts = [
-                user.view(), coordinator.view(), msg.view(), dwallet.view(), pos.view(),
+                user.view(), msg.view(), dwallet.view(), pos.view(),
                 caller.view(), cpi.view(), sys.view(), ika.view(),
             ];
             IkaSign::from_data(&data).unwrap().process(&PROGRAM, &mut accounts)
@@ -1402,7 +1487,6 @@ fn ika_released_or_liquidated_position_cannot_sign() {
 fn ika_wrong_cpi_authority_bump_fails_sign() {
     let pos_bytes = ika_position_bytes(USER, POOL_KEY, DWALLET, 1_200_000, curve::SECP256K1, scheme::ECDSA_SHA256, 1);
     let mut user = RawAccount::new(USER, true, true, &[]);
-    let mut coordinator = RawAccount::new([7u8; 32], false, false, &[]);
     let mut msg = RawAccount::new([8u8; 32], false, true, &[]);
     let mut dwallet = RawAccount::new(DWALLET, false, false, &[]);
     let mut pos = RawAccount::new([5u8; 32], false, false, &pos_bytes);
@@ -1411,10 +1495,10 @@ fn ika_wrong_cpi_authority_bump_fails_sign() {
     let mut sys = RawAccount::new([0u8; 32], false, false, &[]);
     let mut ika = RawAccount::new(*IKA_PROGRAM_ID.as_array(), false, false, &[]);
 
-    let data = [0u8; 100];
+    let data = [0u8; 67];
     let result = unsafe {
         let mut accounts = [
-            user.view(), coordinator.view(), msg.view(), dwallet.view(), pos.view(),
+            user.view(), msg.view(), dwallet.view(), pos.view(),
             caller.view(), wrong_cpi.view(), sys.view(), ika.view(),
         ];
         IkaSign::from_data(&data).unwrap().process(&PROGRAM, &mut accounts)
@@ -1537,10 +1621,10 @@ fn ika_enc_both_account_types_have_distinct_discriminators() {
 #[test]
 fn ika_enc_combined_state_sizes_are_known() {
     // A user with both an Ika position and an encrypted lending position has:
-    // IkaDwalletPosition (128) + EncryptedPosition (144) + LendingPool (416)
-    // = 688 bytes of on-chain state for the position layer alone.
+    // IkaDwalletPosition (128) + EncryptedPosition (144) + LendingPool (432)
+    // = 704 bytes of on-chain state for the position layer alone.
     let total = IkaDwalletPosition::SIZE + EncryptedPosition::SIZE + LendingPool::SIZE;
-    assert_eq!(total, 688);
+    assert_eq!(total, 704);
 }
 
 #[test]

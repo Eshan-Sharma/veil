@@ -375,27 +375,26 @@ fn fhe_handle_helpers_and_constants_match_expected_values() {
 #[test]
 fn ika_manual_cpi_builders_return_ok_on_host() {
     let mut ika_program = RawAccount::new([70u8; 32], false, false, &[]);
-    let mut coordinator = RawAccount::new([71u8; 32], false, false, &[]);
     let mut message_approval = RawAccount::new([72u8; 32], false, true, &[]);
     let mut dwallet = RawAccount::new([73u8; 32], false, true, &[]);
     let mut caller_program = RawAccount::new([74u8; 32], false, false, &[]);
     let mut cpi_authority = RawAccount::new([75u8; 32], false, false, &[]);
     let mut payer = RawAccount::new([76u8; 32], true, true, &[]);
     let mut system_program = RawAccount::new([77u8; 32], false, false, &[]);
+    let mut partial_sig = RawAccount::new([78u8; 32], false, true, &[]);
 
     let ika_program_view = unsafe { ika_program.view() };
-    let coordinator_view = unsafe { coordinator.view() };
     let message_approval_view = unsafe { message_approval.view() };
     let dwallet_view = unsafe { dwallet.view() };
     let caller_program_view = unsafe { caller_program.view() };
     let cpi_authority_view = unsafe { cpi_authority.view() };
     let payer_view = unsafe { payer.view() };
     let system_program_view = unsafe { system_program.view() };
+    let partial_sig_view = unsafe { partial_sig.view() };
 
     assert_eq!(
         ika::approve_message(
             &ika_program_view,
-            &coordinator_view,
             &message_approval_view,
             &dwallet_view,
             &caller_program_view,
@@ -403,9 +402,8 @@ fn ika_manual_cpi_builders_return_ok_on_host() {
             &payer_view,
             &system_program_view,
             &[1u8; 32],
-            &[2u8; 32],
             &[3u8; 32],
-            ika_position::scheme::ECDSA_SHA256,
+            ika_position::scheme::ECDSA_SHA256 as u8,
             4,
             5,
         ),
@@ -423,10 +421,32 @@ fn ika_manual_cpi_builders_return_ok_on_host() {
         ),
         Ok(())
     );
+
+    assert_eq!(
+        ika::transfer_future_sign(
+            &ika_program_view,
+            &caller_program_view,
+            &cpi_authority_view,
+            &partial_sig_view,
+            &Address::new_from_array([89u8; 32]),
+            7,
+        ),
+        Ok(())
+    );
 }
 
 #[test]
-fn fhe_context_stub_operations_succeed() {
+fn fhe_context_constructs_with_expected_shape() {
+    // The Encrypt CPI is real now (vendored `encrypt-pinocchio`), so calling
+    // `add_deposit` / `sub_deposit` / `is_healthy` etc. would invoke
+    // `invoke_signed_with_bounds` and panic on host runtime where there is
+    // no Solana validator. This test therefore covers only what's safe to
+    // assert without firing a CPI: the struct can be built from the right
+    // account slots in the right positions, and reads its own fields back.
+    //
+    // Real per-method behaviour is exercised by:
+    //   - `programs/tests/scenarios.rs` (pure-state path, no CPI)
+    //   - `veil-landing/scripts/e2e-cross-encrypt.ts` (live localnet)
     let mut encrypt_program = RawAccount::new([51u8; 32], false, false, &[]);
     let mut config = RawAccount::new([52u8; 32], false, false, &[]);
     let mut deposit = RawAccount::new([53u8; 32], false, true, &[]);
@@ -436,11 +456,6 @@ fn fhe_context_stub_operations_succeed() {
     let mut payer = RawAccount::new([57u8; 32], true, true, &[]);
     let mut event_authority = RawAccount::new([58u8; 32], false, false, &[]);
     let mut system_program = RawAccount::new([59u8; 32], false, false, &[]);
-    let mut deposit_ct = RawAccount::new([60u8; 32], false, true, &[]);
-    let mut amount_ct = RawAccount::new([61u8; 32], false, true, &[]);
-    let mut debt_ct = RawAccount::new([62u8; 32], false, true, &[]);
-    let mut out_ct = RawAccount::new([63u8; 32], false, true, &[]);
-    let mut bool_ct = RawAccount::new([64u8; 32], false, true, &[]);
 
     let encrypt_program_view = unsafe { encrypt_program.view() };
     let config_view = unsafe { config.view() };
@@ -451,11 +466,6 @@ fn fhe_context_stub_operations_succeed() {
     let payer_view = unsafe { payer.view() };
     let event_authority_view = unsafe { event_authority.view() };
     let system_program_view = unsafe { system_program.view() };
-    let deposit_ct_view = unsafe { deposit_ct.view() };
-    let amount_ct_view = unsafe { amount_ct.view() };
-    let debt_ct_view = unsafe { debt_ct.view() };
-    let out_ct_view = unsafe { out_ct.view() };
-    let bool_ct_view = unsafe { bool_ct.view() };
 
     let ctx = EncryptContext {
         encrypt_program: &encrypt_program_view,
@@ -470,12 +480,14 @@ fn fhe_context_stub_operations_succeed() {
         cpi_authority_bump: 7,
     };
 
-    assert_eq!(ctx.execute_graph_stub(b"graph", &[&deposit_ct_view, &out_ct_view]), Ok(()));
-    assert_eq!(ctx.create_plaintext_u64_stub(123, &deposit_ct_view), Ok(()));
-    assert_eq!(ctx.create_plaintext_bool_stub(true, &bool_ct_view), Ok(()));
-    assert_eq!(ctx.add_deposit(&deposit_ct_view, &amount_ct_view, &out_ct_view), Ok(()));
-    assert_eq!(ctx.sub_deposit(&deposit_ct_view, &amount_ct_view, &out_ct_view), Ok(()));
-    assert_eq!(ctx.add_debt(&debt_ct_view, &amount_ct_view, &out_ct_view), Ok(()));
-    assert_eq!(ctx.sub_debt(&debt_ct_view, &amount_ct_view, &out_ct_view), Ok(()));
-    assert_eq!(ctx.is_healthy(&deposit_ct_view, &debt_ct_view, &bool_ct_view), Ok(()));
+    assert_eq!(ctx.cpi_authority_bump, 7);
+    assert_eq!(ctx.encrypt_program.address().as_ref(), &[51u8; 32]);
+    assert_eq!(ctx.config.address().as_ref(),          &[52u8; 32]);
+    assert_eq!(ctx.deposit.address().as_ref(),         &[53u8; 32]);
+    assert_eq!(ctx.cpi_authority.address().as_ref(),   &[54u8; 32]);
+    assert_eq!(ctx.caller_program.address().as_ref(),  &[55u8; 32]);
+    assert_eq!(ctx.network_encryption_key.address().as_ref(), &[56u8; 32]);
+    assert_eq!(ctx.payer.address().as_ref(),           &[57u8; 32]);
+    assert_eq!(ctx.event_authority.address().as_ref(), &[58u8; 32]);
+    assert_eq!(ctx.system_program.address().as_ref(),  &[59u8; 32]);
 }

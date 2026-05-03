@@ -17,5 +17,22 @@ pinocchio        = { version = "0.11.1", features = ["cpi"] }
 pinocchio-system = "0.6.0"
 pinocchio-token  = "0.6.0"
 
+# Vendored Encrypt SDK (dWallet Labs, BSD-3-Clause-Clear) — bumped to pinocchio 0.11.
+encrypt-types         = { path = "../vendor/encrypt/encrypt-types", default-features = false }
+encrypt-solana-types  = { path = "../vendor/encrypt/encrypt-solana-types" }
+encrypt-pinocchio     = { path = "../vendor/encrypt/encrypt-pinocchio" }
+
 [dev-dependencies]
 # No external test deps needed — all tests use std and the crate itself.
+
+# CU-optimization profile (CU_OPTIMIZATION_PLAN.md lever #5).
+# `cargo build-sbf` builds in --release mode, so these knobs apply to the
+# deployed .so. Expected effect: small CU win on hot paths (cross-crate
+# inlining of pinocchio/encrypt-pinocchio CPI helpers) at the cost of longer
+# build times. No correctness risk — pure codegen toggles. SBF has no
+# unwinding so panic=abort is implicit; overflow-checks follows the Solana
+# default (off in release; the codebase already uses checked_*/saturating_*).
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1

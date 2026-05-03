@@ -39,7 +39,11 @@ use pinocchio_system::instructions::CreateAccount;
 use crate::{
     errors::LendError,
     ika::{CPI_AUTHORITY_SEED, IKA_PROGRAM_ID},
-    state::{ika_position::{dwallet_layout, IkaDwalletPosition}},
+    state::{
+        check_program_owner,
+        ika_position::{dwallet_layout, IkaDwalletPosition},
+        LendingPool,
+    },
 };
 
 pub struct IkaRegister {
@@ -78,6 +82,21 @@ impl IkaRegister {
         let user_addr = *accounts[0].address();
         let pool_addr = *accounts[1].address();
 
+        // ── Enforce per-pool cap on Ika USD value ─────────────────────────────
+        // Defaults to 0 — registration rejected until pool authority opts in
+        // via SetIkaCollateralCap. Closes the "register at u64::MAX, drain
+        // vault" attack vector (gate #3 in IKA_COLLATERAL_WIRING.md).
+        check_program_owner(&accounts[1], program_id)?;
+        {
+            let pool = LendingPool::from_account(&accounts[1])?;
+            if pool.max_ika_usd_cents == 0 {
+                return Err(LendError::IkaCollateralDisabled.into());
+            }
+            if self.usd_value > pool.max_ika_usd_cents {
+                return Err(LendError::IkaCollateralExceedsCap.into());
+            }
+        }
+
         // ── Verify this really is an Ika dWallet account ─────────────────────
         let dwallet_data = accounts[2].try_borrow()
             .map_err(|_| ProgramError::InvalidAccountData)?;
@@ -111,6 +130,16 @@ impl IkaRegister {
         );
         if expected_cpi_authority != *accounts[4].address() {
             return Err(LendError::InvalidPda.into());
+        }
+        // Defence-in-depth (audit 05, finding I-5): the CPI authority MUST be
+        // a Veil-owned PDA. Address derivation alone is not sufficient — if
+        // Veil is upgraded and the seed is reused with different ownership
+        // semantics, this guard catches the mismatch before the IKA CPI
+        // fires. Requires the PDA to be allocated to Veil before any IKA
+        // flow runs (see deployer checklist in
+        // `docs/internal/ika-integration-roadmap.md`).
+        if accounts[4].owner() != program_id {
+            return Err(LendError::InvalidAccountOwner.into());
         }
 
         // ── Verify the dWallet is owned by the Ika program ───────────────────
