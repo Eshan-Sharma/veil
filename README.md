@@ -82,27 +82,26 @@ The core protocol is built using [Pinocchio](https://github.com/febo/pinocchio),
 ## Repository Structure
 
 ```
-/docs
-├── problem_statement.md     # Full breakdown of the problem and solution
-├── user_persona.md          # Target users and use cases
-└── veil_architecture.svg    # System architecture diagram
+/docs                        # Rendered docs site (Fumadocs); see docs/content/
+├── content/                 # Public docs: program-reference/, integration/, concepts/, sdk/, security/
+└── internal/                # Non-public engineering notes (status archive, ika roadmap)
 
 /programs
 └── src/
-    ├── instructions/        # deposit, withdraw, borrow, repay, liquidate, flash_borrow, flash_repay, initialize
-    ├── state/               # LendingPool, UserPosition, LiquidityPool, Treasury
+    ├── instructions/        # deposit, withdraw, borrow, repay, liquidate, flash_*, cross_*, ika_*, private_*
+    ├── state/               # LendingPool, UserPosition, EncryptedPosition, IkaDwalletPosition
+    ├── fhe/                 # Encrypt CPI helpers + FHE graph builders
     ├── errors.rs
     ├── math.rs
     └── entrypoint.rs
 
-/veil-landing                # Next.js marketing site
+/veil-landing                # Next.js dapp + marketing site
+└── frontend-e2e-tests/      # Playwright e2e tests (specs/, helpers/, setup/)
 ```
 
 ---
 
 ## Who Is This For
-
-See [`/docs/user_persona.md`](./docs/user_persona.md) for full profiles. In short:
 
 - **Institutional traders and funds** — BTC/ETH holders who need capital efficiency without custody or privacy tradeoffs
 - **Market makers** — need fast liquidity without leaking inventory or strategy
